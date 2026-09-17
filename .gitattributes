@@ -1,0 +1,19 @@
+# Normalize line endings to LF in the repository, checkout as-is on all platforms
+* text=auto eol=lf
+
+# Binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg text eol=lf
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+
+# Lock files — preserve exactly
+package-lock.json text eol=lf
+yarn.lock text eol=lf
