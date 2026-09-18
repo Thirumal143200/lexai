@@ -8,11 +8,13 @@ services:
     plan: free
     region: oregon
     buildCommand: npm ci && npm run build
-    startCommand: node .next/standalone/server.js
+    startCommand: HOSTNAME=0.0.0.0 node .next/standalone/server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: HOSTNAME
+        value: "0.0.0.0"
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
