@@ -12,6 +12,7 @@
 
 import { GeminiProvider } from './gemini';
 import { MockAIProvider } from './mock';
+import { ResilientAIProvider } from './resilient-provider';
 import type { AIProvider } from './provider';
 import { logger } from '@/lib/utils/logger';
 
@@ -26,13 +27,18 @@ export function getAIProvider(): AIProvider {
   }
 
   const gemini = new GeminiProvider();
+  const localMock = new MockAIProvider();
+
   if (gemini.isAvailable) {
-    _provider = gemini;
-    logger.info('AI provider: Gemini (live mode)', { model: process.env.GEMINI_MODEL ?? 'gemini-3.6-flash' });
+    _provider = new ResilientAIProvider(gemini, localMock);
+    logger.info('AI provider: Resilient Gemini (live mode with local fallback)', {
+      primary: gemini.primaryModel,
+      fallback: gemini.fallbackModel,
+    });
   } else {
     // Graceful degradation: fall back to mock with a warning
     logger.warn('AI provider: Mock (demo mode) — GEMINI_API_KEY not set');
-    _provider = new MockAIProvider();
+    _provider = localMock;
   }
 
   return _provider;

@@ -24,7 +24,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     const chunks = getChunksByDocumentId(db, documentId);
     const provider = getAIProvider();
     const result = await provider.extractClauses(chunks);
-    upsertAnalysis(db, documentId, 'clauses', result, provider.name);
+    const meta = (provider as { lastExecutionMeta?: { modelAttempted: string } }).lastExecutionMeta;
+    upsertAnalysis(db, documentId, 'clauses', result, meta?.modelAttempted ?? provider.name);
 
     return NextResponse.json({ clauses: result.clauses, definedTerms: result.definedTerms });
   } catch (err) {

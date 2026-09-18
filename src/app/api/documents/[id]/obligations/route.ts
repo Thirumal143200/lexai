@@ -24,7 +24,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     const chunks = getChunksByDocumentId(db, documentId);
     const provider = getAIProvider();
     const result = await provider.extractObligations(chunks);
-    upsertAnalysis(db, documentId, 'obligations', result, provider.name);
+    const meta = (provider as { lastExecutionMeta?: { modelAttempted: string } }).lastExecutionMeta;
+    upsertAnalysis(db, documentId, 'obligations', result, meta?.modelAttempted ?? provider.name);
 
     return NextResponse.json({ obligations: result.obligations });
   } catch (err) {

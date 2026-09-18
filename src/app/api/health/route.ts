@@ -9,6 +9,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { AI_CONFIG } from '@/lib/ai/config';
 
 export async function GET() {
   const checks: Record<string, string> = {};
@@ -24,7 +25,7 @@ export async function GET() {
 
   // AI configuration check — does not make any external API calls
   const hasApiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.length > 10);
-  checks.ai = hasApiKey ? 'gemini' : 'demo-mode';
+  checks.ai = hasApiKey ? 'live' : 'demo-mode';
 
   return NextResponse.json(
     {
@@ -33,6 +34,10 @@ export async function GET() {
       timestamp: new Date().toISOString(),
       checks,
       aiMode: hasApiKey ? 'live' : 'demo',
+      model: AI_CONFIG.primaryModel,
+      fallbackModel: AI_CONFIG.fallbackModel,
+      fallbackConfigured: true,
+      localFallbackAvailable: true,
     },
     {
       status: 200,

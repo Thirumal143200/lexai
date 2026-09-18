@@ -29,7 +29,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
     const summaryData = summary ?? await provider.summarizeDocument(chunks, chunks.map((c) => c.text).join('\n'));
     const result = await provider.analyzeRisks(chunks, summaryData);
-    upsertAnalysis(db, documentId, 'risks', result, provider.name);
+    const meta = (provider as { lastExecutionMeta?: { modelAttempted: string } }).lastExecutionMeta;
+    upsertAnalysis(db, documentId, 'risks', result, meta?.modelAttempted ?? provider.name);
 
     return NextResponse.json({ risks: result });
   } catch (err) {

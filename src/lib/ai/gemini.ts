@@ -11,6 +11,7 @@
  * Trust boundary is enforced at the prompt level via explicit system instructions.
  * Prompt injection defense: document content is wrapped in structured delimiters.
  */
+import { randomUUID } from 'crypto';
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import type { AIProvider, DocumentChunk } from './provider';
 import type {
@@ -36,24 +37,7 @@ import {
 import { AppError } from '@/lib/utils/errors';
 import { withRetry } from '@/lib/utils/retry';
 import { logger } from '@/lib/utils/logger';
-import { randomUUID } from 'crypto';
-
-/**
- * Model is configured via GEMINI_MODEL env var with graceful fallbacks.
- * If the configured model is unavailable (e.g. 404 not found), fallback models are attempted.
- */
-const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.6-flash';
-const CANDIDATE_MODELS = [
-  PRIMARY_MODEL,
-  'gemini-3.6-flash',
-  'gemini-3-flash',
-  'gemini-flash-latest',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx);
-const MAX_CONTEXT_CHARS = 60_000;
-const REQUEST_TIMEOUT_MS = 30_000; // 30 second hard timeout per Gemini call
+import { AI_CONFIG, type AIExecutionMeta } from './config';
 
 /**
  * SECURITY: System instruction that establishes trust boundary.
@@ -82,18 +66,35 @@ const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
 ];
 
+export interface GeminiProviderOptions {
+  primaryModel?: string;
+  fallbackModel?: string;
+  aiClient?: GoogleGenAI;
+}
+
 export class GeminiProvider implements AIProvider {
   readonly name = 'gemini';
   readonly isAvailable: boolean;
+  public readonly primaryModel: string;
+  public readonly fallbackModel: string;
+  public lastExecutionMeta: AIExecutionMeta | null = null;
   private ai: GoogleGenAI | null = null;
-  private activeModel: string = CANDIDATE_MODELS[0] ?? 'gemini-2.0-flash';
 
-  constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey.length > 10) {
-      this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey?: string, options?: GeminiProviderOptions) {
+    const key = apiKey ?? process.env.GEMINI_API_KEY;
+    this.primaryModel = options?.primaryModel ?? AI_CONFIG.primaryModel;
+    this.fallbackModel = options?.fallbackModel ?? AI_CONFIG.fallbackModel;
+
+    if (options?.aiClient) {
+      this.ai = options.aiClient;
       this.isAvailable = true;
-      logger.info('Gemini provider initialised', { model: this.activeModel, candidates: CANDIDATE_MODELS });
+    } else if (key && key.length > 10) {
+      this.ai = new GoogleGenAI({ apiKey: key });
+      this.isAvailable = true;
+      logger.info('Gemini provider initialised', {
+        primary: this.primaryModel,
+        fallback: this.fallbackModel,
+      });
     } else {
       this.isAvailable = false;
     }
@@ -103,13 +104,13 @@ export class GeminiProvider implements AIProvider {
    * Wraps document content in security delimiters to enforce trust boundary.
    */
   private wrapDocumentData(content: string): string {
-    const truncated = content.length > MAX_CONTEXT_CHARS
-      ? content.slice(0, MAX_CONTEXT_CHARS) + '\n[... document truncated for analysis ...]'
+    const truncated = content.length > AI_CONFIG.maxContextChars
+      ? content.slice(0, AI_CONFIG.maxContextChars) + '\n[... document truncated for analysis ...]'
       : content;
     return `<DOCUMENT_DATA>\n${truncated}\n</DOCUMENT_DATA>`;
   }
 
-  private chunksToText(chunks: DocumentChunk[], maxChars = MAX_CONTEXT_CHARS): string {
+  private chunksToText(chunks: DocumentChunk[], maxChars = AI_CONFIG.maxContextChars): string {
     let combined = '';
     for (const chunk of chunks) {
       const section = chunk.sectionTitle ? `\n## ${chunk.sectionTitle}\n` : '\n';
@@ -121,10 +122,8 @@ export class GeminiProvider implements AIProvider {
   }
 
   /**
-   * Core Gemini call with full error pipeline and hard timeout:
-   *   request (with AbortController) → finishReason check → text extraction → JSON parse → Zod validate
-   *
-   * Maps Gemini-specific errors to typed AppError codes.
+   * Core Gemini call with controlled fallback chain, timeout, and schema validation:
+   *   Primary Model (with 1 retry) → Fallback Model (with 1 retry) → Candidate Models
    */
   private async callGemini<T>(
     prompt: string,
@@ -142,11 +141,11 @@ export class GeminiProvider implements AIProvider {
     const ai = this.ai;
     const startMs = Date.now();
 
-    // Order of models to try: activeModel first, then other candidates in CANDIDATE_MODELS
-    const modelsToTry = [
-      this.activeModel,
-      ...CANDIDATE_MODELS.filter((m) => m !== this.activeModel),
-    ];
+    // Controlled candidate chain: primary -> fallback (max 2 models to bound retries)
+    const modelsToTry = [this.primaryModel];
+    if (this.fallbackModel && this.fallbackModel !== this.primaryModel) {
+      modelsToTry.push(this.fallbackModel);
+    }
 
     let lastError: unknown;
 
@@ -155,9 +154,8 @@ export class GeminiProvider implements AIProvider {
 
       try {
         return await withRetry(async () => {
-          // Hard timeout via AbortController
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+          const timeoutId = setTimeout(() => controller.abort(), AI_CONFIG.requestTimeoutMs);
 
           try {
             const response = await ai.models.generateContent({
@@ -233,17 +231,19 @@ export class GeminiProvider implements AIProvider {
 
             try {
               const validated = schema.parse(parsed);
-              if (this.activeModel !== currentModel) {
-                logger.info('Gemini active model updated after successful fallback', {
-                  from: this.activeModel,
-                  to: currentModel,
-                });
-                this.activeModel = currentModel;
-              }
+              this.lastExecutionMeta = {
+                modelAttempted: currentModel,
+                fallbackUsed: currentModel !== this.primaryModel,
+                attemptCount: modelIdx + 1,
+                latencyMs: Date.now() - startMs,
+                source: currentModel === this.primaryModel ? 'primary' : 'fallback',
+              };
+
               logger.info('AI operation completed', {
                 operation: operationName,
                 model: currentModel,
-                durationMs: Date.now() - startMs,
+                fallbackUsed: this.lastExecutionMeta.fallbackUsed,
+                durationMs: this.lastExecutionMeta.latencyMs,
               });
               return validated;
             } catch (err) {
@@ -285,8 +285,13 @@ export class GeminiProvider implements AIProvider {
               );
             }
 
-            // Rate limiting
-            if (message.includes('429') || message.toLowerCase().includes('rate limit') || message.toLowerCase().includes('quota')) {
+            // Rate limiting (429)
+            if (
+              message.includes('429') ||
+              message.toLowerCase().includes('rate limit') ||
+              message.toLowerCase().includes('quota') ||
+              message.toLowerCase().includes('resource_exhausted')
+            ) {
               throw new AppError(
                 'AI service rate limit reached. Please wait a moment.',
                 429,
@@ -295,7 +300,11 @@ export class GeminiProvider implements AIProvider {
             }
 
             // High demand / service overload (503)
-            if (message.includes('503') || message.toLowerCase().includes('high demand') || message.includes('UNAVAILABLE')) {
+            if (
+              message.includes('503') ||
+              message.toLowerCase().includes('high demand') ||
+              message.includes('UNAVAILABLE')
+            ) {
               throw new AppError(
                 `AI model "${currentModel}" is temporarily overloaded: ${message}`,
                 503,
@@ -303,8 +312,13 @@ export class GeminiProvider implements AIProvider {
               );
             }
 
-            // Invalid or deprecated model
-            if (message.includes('not found') || message.includes('not supported') || message.includes('404') || message.includes('no longer available')) {
+            // Invalid or deprecated model (404)
+            if (
+              message.includes('not found') ||
+              message.includes('not supported') ||
+              message.includes('404') ||
+              message.includes('no longer available')
+            ) {
               throw new AppError(
                 `AI model "${currentModel}" is not available: ${message}`,
                 400,
@@ -312,12 +326,17 @@ export class GeminiProvider implements AIProvider {
               );
             }
 
-            // Auth errors
-            if (message.includes('401') || message.includes('403') || message.includes('PERMISSION_DENIED') || message.includes('API key')) {
+            // Auth errors (401 / 403)
+            if (
+              message.includes('401') ||
+              message.includes('403') ||
+              message.includes('PERMISSION_DENIED') ||
+              message.includes('API key')
+            ) {
               throw new AppError(
                 'AI authentication failed. Check your GEMINI_API_KEY.',
                 401,
-                'AI_UNAVAILABLE'
+                'UNAUTHORIZED'
               );
             }
 
@@ -337,28 +356,51 @@ export class GeminiProvider implements AIProvider {
               'AI_PROVIDER_ERROR'
             );
           }
-        }, { maxRetries: 1, baseDelayMs: 500 });
+        }, {
+          maxRetries: AI_CONFIG.maxRetriesPerModel,
+          baseDelayMs: AI_CONFIG.baseDelayMs,
+          maxDelayMs: AI_CONFIG.maxDelayMs,
+        });
       } catch (err) {
         lastError = err;
-        const isModelUnavailable =
-          err instanceof AppError &&
-          err.code === 'AI_UNAVAILABLE' &&
-          (err.message.includes('not available') ||
-            err.message.includes('not found') ||
-            err.message.includes('not supported') ||
-            err.message.includes('overloaded') ||
-            err.message.includes('high demand') ||
-            err.message.includes('longer available'));
 
-        if (isModelUnavailable && modelIdx < modelsToTry.length - 1) {
-          logger.warn('AI model unavailable, trying fallback model', {
+        const isAuthOrSafetyError =
+          err instanceof AppError &&
+          (err.statusCode === 401 ||
+            err.statusCode === 403 ||
+            err.code === 'UNAUTHORIZED' ||
+            err.code === 'FORBIDDEN' ||
+            err.code === 'AI_BLOCKED_RESPONSE');
+
+        const isRecoverableModelError =
+          !isAuthOrSafetyError &&
+          err instanceof AppError &&
+          (err.code === 'AI_RATE_LIMITED' ||
+            err.code === 'AI_UNAVAILABLE' ||
+            err.code === 'AI_TIMEOUT' ||
+            err.code === 'AI_EMPTY_RESPONSE' ||
+            (err.code === 'AI_PROVIDER_ERROR' &&
+              (err.statusCode === 500 || err.statusCode === 502 || err.statusCode === 503 || err.statusCode === 504)));
+
+        if (isRecoverableModelError && modelIdx < modelsToTry.length - 1) {
+          logger.warn('AI model encountered recoverable error, trying fallback model', {
             failedModel: currentModel,
             nextModel: modelsToTry[modelIdx + 1],
+            errorCode: (err as AppError).code,
             operation: operationName,
           });
           continue;
         }
 
+        // Non-recoverable error (e.g. auth, prompt safety) or end of chain
+        this.lastExecutionMeta = {
+          modelAttempted: currentModel,
+          fallbackUsed: modelIdx > 0,
+          attemptCount: modelIdx + 1,
+          errorCategory: err instanceof AppError ? err.code : 'UNKNOWN',
+          latencyMs: Date.now() - startMs,
+          source: modelIdx === 0 ? 'primary' : 'fallback',
+        };
         throw err;
       }
     }

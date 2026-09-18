@@ -17,8 +17,7 @@ import path from 'path';
 import type Database from 'better-sqlite3';
 import { extractText } from './extractor';
 import { chunkText } from './chunker';
-import { insertChunks, updateDocumentStatus, upsertAnalysis } from '@/lib/db/queries';
-import { getAIProvider } from '@/lib/ai';
+import { insertChunks, updateDocumentStatus } from '@/lib/db/queries';
 import { logger } from '@/lib/utils/logger';
 import { AppError } from '@/lib/utils/errors';
 
@@ -62,8 +61,6 @@ export async function processDocument(
   filePath: string,
   mimeType: string
 ): Promise<void> {
-  const provider = getAIProvider();
-
   try {
     updateDocumentStatus(db, documentId, 'processing');
 
@@ -85,55 +82,10 @@ export async function processDocument(
       method: extracted.extractionMethod,
     });
 
-    // Stage 3: AI analysis — run summary, clauses, obligations in parallel
-    // Each analysis is independently wrapped so failures don't block others
-    const [summaryResult, clausesResult, obligationsResult] = await Promise.allSettled([
-      provider.summarizeDocument(chunks, extracted.text),
-      provider.extractClauses(chunks),
-      provider.extractObligations(chunks),
-    ]);
-
-    // Store successful results
-    if (summaryResult.status === 'fulfilled') {
-      upsertAnalysis(db, documentId, 'summary', summaryResult.value, provider.name);
-      logger.info('Summary analysis stored', { documentId });
-
-      // Risks analysis depends on summary — run sequentially after
-      try {
-        const riskResult = await provider.analyzeRisks(chunks, summaryResult.value);
-        upsertAnalysis(db, documentId, 'risks', riskResult, provider.name);
-        logger.info('Risk analysis stored', { documentId });
-      } catch (err) {
-        const msg = err instanceof AppError ? `${err.code}: ${err.message}` : (err instanceof Error ? err.message : String(err));
-        logger.warn('Risk analysis failed', { documentId, error: msg });
-      }
-    } else {
-      const reason = summaryResult.reason;
-      const msg = reason instanceof AppError
-        ? `${reason.code}: ${reason.message}`
-        : (reason instanceof Error ? reason.message : String(reason));
-      logger.error('Summary generation failed', { documentId, error: msg, provider: provider.name });
-    }
-
-    if (clausesResult.status === 'fulfilled') {
-      upsertAnalysis(db, documentId, 'clauses', clausesResult.value, provider.name);
-    } else {
-      const reason = clausesResult.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason);
-      logger.warn('Clause extraction failed', { documentId, error: msg });
-    }
-
-    if (obligationsResult.status === 'fulfilled' && obligationsResult.value) {
-      upsertAnalysis(db, documentId, 'obligations', obligationsResult.value, provider.name);
-    } else if (obligationsResult.status === 'rejected') {
-      const reason = obligationsResult.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason);
-      logger.warn('Obligation extraction failed', { documentId, error: msg });
-    }
-
-    // Mark as ready even if some analyses failed — the frontend can retry individual analyses
+    // Mark document as ready for on-demand tab analysis
+    // Avoids eager multi-analysis rate-limit storms during upload
     updateDocumentStatus(db, documentId, 'ready');
-    logger.info('Document processing complete', { documentId });
+    logger.info('Document processing complete and ready for analysis', { documentId });
 
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Processing failed';

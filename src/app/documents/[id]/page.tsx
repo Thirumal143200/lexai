@@ -46,6 +46,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
   // Analyses data states — each has loading + error + data
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
+  const [summaryMeta, setSummaryMeta] = useState<{ model?: string; source?: string } | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const loadingSummaryRef = useRef(false);
@@ -113,18 +114,23 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       clearTimeout(timeoutId);
 
       if (res.ok) {
-        const data = (await res.json()) as { summary?: DocumentSummary; status?: string };
+        const data = (await res.json()) as { summary?: DocumentSummary; status?: string; meta?: { model?: string; source?: string } };
         if (data.summary) {
           setSummary(data.summary);
+          setSummaryMeta(data.meta ?? null);
           setSummaryError(null);
         } else if (data.status === 'processing') {
-          setSummaryError('Document is still being analysed in the background. Please wait a moment and click Retry.');
+          setSummaryError('Document is still being processed. Please wait a moment and click Retry.');
         } else {
           setSummaryError('Analysis completed but no summary content was returned. Please retry.');
         }
       } else {
-        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string };
-        setSummaryError(data.error || `Analysis failed (HTTP ${res.status})`);
+        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string; code?: string };
+        if (res.status === 429 || data.code === 'AI_RATE_LIMITED') {
+          setSummaryError('Live AI service is temporarily rate-limited. Click Retry to re-attempt analysis.');
+        } else {
+          setSummaryError(data.error || `Analysis failed (HTTP ${res.status})`);
+        }
       }
     } catch (err) {
       clearTimeout(timeoutId);
@@ -521,6 +527,37 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                {/* Fallback / Local Analysis Source Notice */}
+                {summaryMeta?.source === 'local' && (
+                  <div className="notice notice-info" role="status" style={{ marginBottom: 'var(--space-2)' }}>
+                    <span>📄</span>
+                    <div style={{ flex: 1 }}>
+                      <strong>Local Analysis (Rate Limit Fallback)</strong>
+                      <p style={{ marginTop: '2px', fontSize: '0.8125rem' }}>
+                        Live AI was temporarily rate-limited. This analysis was generated deterministically from your document content.
+                      </p>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 'var(--space-2)' }}
+                        onClick={() => fetchSummary(true)}
+                      >
+                        ⚡ Retry Live Gemini
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {summaryMeta?.source === 'fallback' && (
+                  <div className="notice notice-info" role="status" style={{ marginBottom: 'var(--space-2)' }}>
+                    <span>⚡</span>
+                    <div style={{ flex: 1 }}>
+                      <strong>Fallback AI Model Active</strong>
+                      <p style={{ marginTop: '2px', fontSize: '0.8125rem' }}>
+                        Analysis completed using Google Gemini Flash-Lite fallback model.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Meta Highlights */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
                   <div className="card" style={{ padding: 'var(--space-3)' }}>

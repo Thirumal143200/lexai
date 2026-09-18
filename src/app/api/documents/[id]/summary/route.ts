@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { getDocumentById, getChunksByDocumentId, getAnalysis, upsertAnalysis } from '@/lib/db/queries';
+import { getDocumentById, getChunksByDocumentId, getAnalysisWithMeta, upsertAnalysis } from '@/lib/db/queries';
 import { validateDocumentId } from '@/lib/security/validator';
 import { toApiError, AppError } from '@/lib/utils/errors';
 import { getAIProvider } from '@/lib/ai';
@@ -36,8 +36,22 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     }
 
     // 1. Return cached result if available (Cache-First)
-    const cached = getAnalysis<DocumentSummary>(db, documentId, 'summary');
-    if (cached) return NextResponse.json({ summary: cached });
+    const cached = getAnalysisWithMeta<DocumentSummary>(db, documentId, 'summary');
+    if (cached) {
+      const source = cached.modelName.includes('local')
+        ? 'local'
+        : cached.modelName.includes('lite') || cached.modelName.includes('fallback')
+        ? 'fallback'
+        : 'primary';
+      return NextResponse.json({
+        summary: cached.result,
+        meta: {
+          model: cached.modelName,
+          source,
+          cached: true,
+        },
+      });
+    }
 
     // 2. Validate chunks exist
     const chunks = getChunksByDocumentId(db, documentId);
@@ -59,8 +73,21 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     try {
       const summary = await Promise.race([summaryPromise, timeoutPromise]);
       if (timeoutHandle) clearTimeout(timeoutHandle);
-      upsertAnalysis(db, documentId, 'summary', summary, provider.name);
-      return NextResponse.json({ summary });
+
+      // Extract execution metadata (primary / fallback / local)
+      const executionMeta = (provider as { lastExecutionMeta?: { modelAttempted: string; source: string } }).lastExecutionMeta;
+      const modelName = executionMeta?.modelAttempted ?? provider.name;
+      const source = executionMeta?.source ?? (modelName.includes('local') ? 'local' : 'primary');
+
+      upsertAnalysis(db, documentId, 'summary', summary, modelName);
+      return NextResponse.json({
+        summary,
+        meta: {
+          model: modelName,
+          source,
+          cached: false,
+        },
+      });
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }

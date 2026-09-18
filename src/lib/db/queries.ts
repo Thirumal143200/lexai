@@ -154,6 +154,29 @@ export function getAnalysis<T>(db: Database.Database, documentId: string, type: 
   return JSON.parse(row.result_json) as T;
 }
 
+export interface AnalysisRecord<T> {
+  result: T;
+  modelName: string;
+  createdAt: string;
+}
+
+export function getAnalysisWithMeta<T>(
+  db: Database.Database,
+  documentId: string,
+  type: string
+): AnalysisRecord<T> | null {
+  const row = db.prepare(
+    'SELECT result_json, model_name, created_at FROM analyses WHERE document_id = ? AND type = ?'
+  ).get(documentId, type) as { result_json: string; model_name: string; created_at: string } | null;
+
+  if (!row) return null;
+  return {
+    result: JSON.parse(row.result_json) as T,
+    modelName: row.model_name,
+    createdAt: row.created_at,
+  };
+}
+
 // ─── Question queries ────────────────────────────────────────────────────────
 
 export function insertQuestion(
