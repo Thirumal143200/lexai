@@ -57,7 +57,7 @@ const nextConfig: NextConfig = {
    * pdf-parse uses PDF.js with worker threads; better-sqlite3 is a native addon.
    * Bundling these breaks their runtime behaviour on Render/Node 22+.
    */
-  serverExternalPackages: ['pdf-parse', 'better-sqlite3', 'mammoth'],
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'better-sqlite3', 'mammoth'],
 };
 
 export default nextConfig;

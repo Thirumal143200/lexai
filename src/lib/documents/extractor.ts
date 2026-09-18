@@ -83,6 +83,29 @@ async function extractFromPdf(buffer: Buffer): Promise<ExtractedText> {
     let pageCount: number | undefined;
 
     if (pdfModule.PDFParse) {
+      // Configure worker explicitly if setWorker and pdf-parse/worker are available
+      if (typeof pdfModule.PDFParse.setWorker === 'function') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const workerModule: any = await import('pdf-parse/worker');
+          if (typeof workerModule?.getPath === 'function') {
+            const rawWorkerPath = workerModule.getPath();
+            if (rawWorkerPath) {
+              const { pathToFileURL } = await import('node:url');
+              const workerUrl = rawWorkerPath.startsWith('file://')
+                ? rawWorkerPath
+                : pathToFileURL(rawWorkerPath).href;
+              pdfModule.PDFParse.setWorker(workerUrl);
+              logger.info('pdf-parse worker configured', { workerUrl });
+            }
+          }
+        } catch (workerErr) {
+          logger.warn('pdf-parse/worker setup skipped, using pdfjs-dist fallback', {
+            error: workerErr instanceof Error ? workerErr.message : String(workerErr),
+          });
+        }
+      }
+
       // pdf-parse v2 class API
       const parser = new pdfModule.PDFParse({ data: buffer });
       try {
