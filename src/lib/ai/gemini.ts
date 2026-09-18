@@ -42,9 +42,11 @@ import { randomUUID } from 'crypto';
  * Model is configured via GEMINI_MODEL env var with graceful fallbacks.
  * If the configured model is unavailable (e.g. 404 not found), fallback models are attempted.
  */
-const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.6-flash';
 const CANDIDATE_MODELS = [
   PRIMARY_MODEL,
+  'gemini-3.6-flash',
+  'gemini-3-flash',
   'gemini-flash-latest',
   'gemini-2.5-flash',
   'gemini-2.0-flash',
