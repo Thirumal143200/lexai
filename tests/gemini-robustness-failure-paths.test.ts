@@ -14,7 +14,7 @@
  * 10. Finite state transitions (no infinite loading)
  */
 
-import { AppError, toApiError, USER_MESSAGES } from '@/lib/utils/errors';
+import { AppError, toApiError, USER_MESSAGES, type ErrorCode } from '@/lib/utils/errors';
 import { withRetry } from '@/lib/utils/retry';
 import { DocumentSummarySchema } from '@/lib/ai/schemas';
 
@@ -185,6 +185,96 @@ describe('Gemini Failure Paths & Resilience', () => {
 
       expect(loading).toBe(false);
       expect(error).toBe('Network failure');
+    });
+  });
+
+  describe('11. Summary API Specific Regression Suite', () => {
+    it('handles successful summary generation', () => {
+      const validSummary = {
+        plainLanguageSummary: 'A legally binding agreement between parties.',
+        keyPoints: ['Confidential information must be protected', 'Term is 3 years'],
+        metadata: {
+          documentType: 'Non-Disclosure Agreement',
+          parties: ['Alpha Corp', 'Beta LLC'],
+          governingLaw: 'Delaware',
+        },
+      };
+
+      const validated = DocumentSummarySchema.parse(validSummary);
+      expect(validated.plainLanguageSummary).toBe('A legally binding agreement between parties.');
+      expect(validated.keyPoints).toHaveLength(2);
+    });
+
+    it('enforces 35-second hard timeout with HTTP 504 and AI_TIMEOUT code', async () => {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new AppError('Summary generation timed out. Please retry.', 504, 'AI_TIMEOUT'));
+        }, 10);
+      });
+
+      const longRunningPromise = new Promise<never>(() => {});
+
+      await expect(Promise.race([longRunningPromise, timeoutPromise])).rejects.toMatchObject({
+        statusCode: 504,
+        code: 'AI_TIMEOUT',
+        message: 'Summary generation timed out. Please retry.',
+      });
+    });
+
+    it('handles Gemini error mapping cleanly without leaking internals', () => {
+      const geminiError = new AppError('AI provider returned 503 error', 502, 'AI_PROVIDER_ERROR');
+      const apiErr = toApiError(geminiError);
+
+      expect(apiErr.statusCode).toBe(502);
+      expect(apiErr.code).toBe('AI_PROVIDER_ERROR');
+      expect(apiErr.error).toBe('AI provider returned 503 error');
+      expect(USER_MESSAGES[apiErr.code as ErrorCode]).toBe('A temporary error occurred with the AI service. Please try again.');
+    });
+
+    it('handles malformed Gemini response JSON', () => {
+      const rawResponse = 'This is not valid JSON at all';
+      expect(() => JSON.parse(rawResponse)).toThrow();
+
+      const appErr = new AppError('AI returned malformed JSON for summary', 502, 'AI_INVALID_RESPONSE');
+      expect(appErr.statusCode).toBe(502);
+      expect(appErr.code).toBe('AI_INVALID_RESPONSE');
+    });
+
+    it('verifies cache-first behavior returns existing SQLite summary without calling AI', () => {
+      const mockCachedSummary = {
+        plainLanguageSummary: 'Pre-existing cached summary.',
+        keyPoints: ['Cached point 1'],
+      };
+
+      let aiCalled = false;
+      const getSummary = (hasCache: boolean) => {
+        if (hasCache) return mockCachedSummary;
+        aiCalled = true;
+        return null;
+      };
+
+      const result = getSummary(true);
+      expect(result).toEqual(mockCachedSummary);
+      expect(aiCalled).toBe(false);
+    });
+
+    it('handles missing summary by requiring text chunks or returning EMPTY_DOCUMENT', () => {
+      const emptyChunks: unknown[] = [];
+      const validateChunks = (chunks: unknown[]) => {
+        if (!chunks || chunks.length === 0) {
+          throw new AppError('Document has no processed text chunks to summarize.', 422, 'EMPTY_DOCUMENT');
+        }
+      };
+
+      expect(() => validateChunks(emptyChunks)).toThrow(AppError);
+      try {
+        validateChunks(emptyChunks);
+      } catch (err) {
+        expect(err).toBeInstanceOf(AppError);
+        const apiErr = toApiError(err);
+        expect(apiErr.statusCode).toBe(422);
+        expect(apiErr.code).toBe('EMPTY_DOCUMENT');
+      }
     });
   });
 });

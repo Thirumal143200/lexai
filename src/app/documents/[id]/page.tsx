@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, use } from 'react';
+import { useState, useEffect, useCallback, use, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import AppLayout from '@/components/layout/AppLayout';
@@ -48,19 +48,23 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const loadingSummaryRef = useRef(false);
 
   const [clausesData, setClausesData] = useState<ClauseExtractionResult | null>(null);
   const [loadingClauses, setLoadingClauses] = useState(false);
   const [clausesError, setClausesError] = useState<string | null>(null);
+  const loadingClausesRef = useRef(false);
   const [clauseFilter, setClauseFilter] = useState<string>('all');
 
   const [risksData, setRisksData] = useState<RiskAnalysisResult | null>(null);
   const [loadingRisks, setLoadingRisks] = useState(false);
   const [risksError, setRisksError] = useState<string | null>(null);
+  const loadingRisksRef = useRef(false);
 
   const [obligationsData, setObligationsData] = useState<ObligationExtractionResult['obligations'] | null>(null);
   const [loadingObligations, setLoadingObligations] = useState(false);
   const [obligationsError, setObligationsError] = useState<string | null>(null);
+  const loadingObligationsRef = useRef(false);
 
   // Q&A states
   const [questionInput, setQuestionInput] = useState('');
@@ -90,100 +94,174 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     }
   }, [documentId]);
 
-  // 2. Fetch Summary (with error handling and retry support)
+  // 2. Fetch Summary (with error handling, abort timeout, and retry support)
   const fetchSummary = useCallback(async (forceRetry = false) => {
-    if ((summary && !forceRetry) || loadingSummary) return;
+    if (summary && !forceRetry) return;
+    if (loadingSummaryRef.current) return;
+
+    loadingSummaryRef.current = true;
     setLoadingSummary(true);
     setSummaryError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
+
     try {
-      const res = await fetch(`/api/documents/${documentId}/summary`);
+      const res = await fetch(`/api/documents/${documentId}/summary`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        const data = await res.json() as { summary?: DocumentSummary; status?: string };
+        const data = (await res.json()) as { summary?: DocumentSummary; status?: string };
         if (data.summary) {
           setSummary(data.summary);
+          setSummaryError(null);
         } else if (data.status === 'processing') {
-          setSummaryError('Document is still being analysed. Please wait a moment and try again.');
+          setSummaryError('Document is still being analysed in the background. Please wait a moment and click Retry.');
+        } else {
+          setSummaryError('Analysis completed but no summary content was returned. Please retry.');
         }
       } else {
-        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string };
         setSummaryError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
-    } catch {
-      setSummaryError('Failed to connect to the server. Please try again.');
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setSummaryError('Summary generation timed out after 35 seconds. Please click Retry.');
+      } else {
+        setSummaryError('Failed to connect to the server. Please check your connection and try again.');
+      }
     } finally {
+      loadingSummaryRef.current = false;
       setLoadingSummary(false);
     }
-  }, [documentId, summary, loadingSummary]);
+  }, [documentId, summary]);
 
   // 3. Fetch Clauses
   const fetchClauses = useCallback(async (forceRetry = false) => {
-    if ((clausesData && !forceRetry) || loadingClauses) return;
+    if (clausesData && !forceRetry) return;
+    if (loadingClausesRef.current) return;
+
+    loadingClausesRef.current = true;
     setLoadingClauses(true);
     setClausesError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
+
     try {
-      const res = await fetch(`/api/documents/${documentId}/clauses`);
+      const res = await fetch(`/api/documents/${documentId}/clauses`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        const data = await res.json() as ClauseExtractionResult;
+        const data = (await res.json()) as ClauseExtractionResult;
         setClausesData(data);
+        setClausesError(null);
       } else {
-        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string };
         setClausesError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
-    } catch {
-      setClausesError('Failed to connect to the server. Please try again.');
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setClausesError('Clause analysis timed out after 35 seconds. Please click Retry.');
+      } else {
+        setClausesError('Failed to connect to the server. Please try again.');
+      }
     } finally {
+      loadingClausesRef.current = false;
       setLoadingClauses(false);
     }
-  }, [documentId, clausesData, loadingClauses]);
+  }, [documentId, clausesData]);
 
   // 4. Fetch Risks
   const fetchRisks = useCallback(async (forceRetry = false) => {
-    if ((risksData && !forceRetry) || loadingRisks) return;
+    if (risksData && !forceRetry) return;
+    if (loadingRisksRef.current) return;
+
+    loadingRisksRef.current = true;
     setLoadingRisks(true);
     setRisksError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
+
     try {
-      const res = await fetch(`/api/documents/${documentId}/risks`);
+      const res = await fetch(`/api/documents/${documentId}/risks`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        const data = await res.json() as { risks: RiskAnalysisResult };
+        const data = (await res.json()) as { risks: RiskAnalysisResult };
         setRisksData(data.risks);
+        setRisksError(null);
       } else {
-        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string };
         setRisksError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
-    } catch {
-      setRisksError('Failed to connect to the server. Please try again.');
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setRisksError('Risk analysis timed out after 35 seconds. Please click Retry.');
+      } else {
+        setRisksError('Failed to connect to the server. Please try again.');
+      }
     } finally {
+      loadingRisksRef.current = false;
       setLoadingRisks(false);
     }
-  }, [documentId, risksData, loadingRisks]);
+  }, [documentId, risksData]);
 
   // 5. Fetch Obligations
   const fetchObligations = useCallback(async (forceRetry = false) => {
-    if ((obligationsData && !forceRetry) || loadingObligations) return;
+    if (obligationsData && !forceRetry) return;
+    if (loadingObligationsRef.current) return;
+
+    loadingObligationsRef.current = true;
     setLoadingObligations(true);
     setObligationsError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
+
     try {
-      const res = await fetch(`/api/documents/${documentId}/obligations`);
+      const res = await fetch(`/api/documents/${documentId}/obligations`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        const data = await res.json() as { obligations: ObligationExtractionResult['obligations'] };
+        const data = (await res.json()) as { obligations: ObligationExtractionResult['obligations'] };
         setObligationsData(data.obligations);
+        setObligationsError(null);
       } else {
-        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        const data = (await res.json().catch(() => ({ error: 'Analysis failed' }))) as { error?: string };
         setObligationsError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
-    } catch {
-      setObligationsError('Failed to connect to the server. Please try again.');
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setObligationsError('Obligation analysis timed out after 35 seconds. Please click Retry.');
+      } else {
+        setObligationsError('Failed to connect to the server. Please try again.');
+      }
     } finally {
+      loadingObligationsRef.current = false;
       setLoadingObligations(false);
     }
-  }, [documentId, obligationsData, loadingObligations]);
+  }, [documentId, obligationsData]);
 
   // 6. Fetch Q&A history
   const fetchQuestions = useCallback(async () => {
     try {
       const res = await fetch(`/api/documents/${documentId}/questions`);
       if (res.ok) {
-        const data = await res.json() as { questions: QuestionHistoryItem[] };
+        const data = (await res.json()) as { questions: QuestionHistoryItem[] };
         setQaHistory(data.questions || []);
       }
     } catch {
@@ -202,10 +280,10 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
         body: JSON.stringify({ type }),
       });
       if (res.ok) {
-        const data = await res.json() as { checklist: Checklist };
+        const data = (await res.json()) as { checklist: Checklist };
         setChecklist(data.checklist);
       } else {
-        const data = await res.json().catch(() => ({ error: 'Failed to generate checklist' })) as { error?: string };
+        const data = (await res.json().catch(() => ({ error: 'Failed to generate checklist' }))) as { error?: string };
         setChecklistError(data.error || `Checklist generation failed (HTTP ${res.status})`);
       }
     } catch {
@@ -219,6 +297,15 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     fetchDoc();
     fetchQuestions();
   }, [fetchDoc, fetchQuestions]);
+
+  // Poll document status if currently processing
+  useEffect(() => {
+    if (!doc || doc.status !== 'processing') return;
+    const timer = setInterval(() => {
+      fetchDoc();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [doc, fetchDoc]);
 
   // Auto-fetch data based on active tab
   useEffect(() => {

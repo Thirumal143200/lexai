@@ -39,11 +39,15 @@ import { logger } from '@/lib/utils/logger';
 import { randomUUID } from 'crypto';
 
 /**
- * Model is configured via GEMINI_MODEL env var.
- * Default: gemini-2.5-flash (stable, JSON mode, cost-effective for legal doc analysis).
- * gemini-1.5-flash and gemini-2.0-flash are DEPRECATED and will fail.
+ * Model is configured via GEMINI_MODEL env var with graceful fallbacks.
+ * If the configured model is unavailable (e.g. 404 not found), fallback models are attempted.
  */
-const MODEL_NAME = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+const CANDIDATE_MODELS = [
+  PRIMARY_MODEL,
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+].filter((m, idx, arr) => arr.indexOf(m) === idx);
 const MAX_CONTEXT_CHARS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000; // 30 second hard timeout per Gemini call
 
@@ -78,13 +82,14 @@ export class GeminiProvider implements AIProvider {
   readonly name = 'gemini';
   readonly isAvailable: boolean;
   private ai: GoogleGenAI | null = null;
+  private activeModel: string = CANDIDATE_MODELS[0] ?? 'gemini-2.0-flash';
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey && apiKey.length > 10) {
       this.ai = new GoogleGenAI({ apiKey });
       this.isAvailable = true;
-      logger.info('Gemini provider initialised', { model: MODEL_NAME });
+      logger.info('Gemini provider initialised', { model: this.activeModel, candidates: CANDIDATE_MODELS });
     } else {
       this.isAvailable = false;
     }
@@ -133,170 +138,214 @@ export class GeminiProvider implements AIProvider {
     const ai = this.ai;
     const startMs = Date.now();
 
-    return withRetry(async () => {
-      // Hard timeout via AbortController
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // Order of models to try: activeModel first, then other candidates in CANDIDATE_MODELS
+    const modelsToTry = [
+      this.activeModel,
+      ...CANDIDATE_MODELS.filter((m) => m !== this.activeModel),
+    ];
+
+    let lastError: unknown;
+
+    for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx++) {
+      const currentModel = modelsToTry[modelIdx];
 
       try {
-        const response = await ai.models.generateContent({
-          model: MODEL_NAME,
-          contents: prompt,
-          config: {
-            systemInstruction: SYSTEM_TRUST_BOUNDARY,
-            safetySettings: SAFETY_SETTINGS,
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-            maxOutputTokens: 8192,
-            abortSignal: controller.signal,
-          },
+        return await withRetry(async () => {
+          // Hard timeout via AbortController
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+          try {
+            const response = await ai.models.generateContent({
+              model: currentModel,
+              contents: prompt,
+              config: {
+                systemInstruction: SYSTEM_TRUST_BOUNDARY,
+                safetySettings: SAFETY_SETTINGS,
+                responseMimeType: 'application/json',
+                temperature: 0.1,
+                maxOutputTokens: 8192,
+                abortSignal: controller.signal,
+              },
+            });
+
+            clearTimeout(timeoutId);
+
+            // Check finish reason
+            const candidate = response.candidates?.[0];
+            const finishReason = candidate?.finishReason;
+
+            if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+              logger.warn('Gemini non-STOP finish', {
+                operation: operationName,
+                finishReason,
+                model: currentModel,
+                durationMs: Date.now() - startMs,
+              });
+              throw new AppError(
+                `AI response for ${operationName} was not completed: ${finishReason}`,
+                502,
+                'AI_BLOCKED_RESPONSE'
+              );
+            }
+
+            // Also check prompt-level block
+            if (response.promptFeedback?.blockReason) {
+              throw new AppError(
+                `Request was blocked by AI safety filters: ${response.promptFeedback.blockReason}`,
+                400,
+                'AI_BLOCKED_RESPONSE'
+              );
+            }
+
+            const text = response.text ?? '';
+            if (!text || text.trim().length === 0) {
+              throw new AppError(
+                `Empty response from AI for ${operationName}`,
+                502,
+                'AI_EMPTY_RESPONSE'
+              );
+            }
+
+            // Strip markdown code fences if model wraps JSON in them
+            const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(cleaned);
+            } catch {
+              logger.warn('Gemini returned malformed JSON', {
+                operation: operationName,
+                model: currentModel,
+                textLength: cleaned.length,
+                textPreview: cleaned.substring(0, 200),
+              });
+              throw new AppError(
+                `AI returned malformed JSON for ${operationName}`,
+                502,
+                'AI_INVALID_RESPONSE'
+              );
+            }
+
+            try {
+              const validated = schema.parse(parsed);
+              if (this.activeModel !== currentModel) {
+                logger.info('Gemini active model updated after successful fallback', {
+                  from: this.activeModel,
+                  to: currentModel,
+                });
+                this.activeModel = currentModel;
+              }
+              logger.info('AI operation completed', {
+                operation: operationName,
+                model: currentModel,
+                durationMs: Date.now() - startMs,
+              });
+              return validated;
+            } catch (err) {
+              logger.warn('Gemini schema validation failed', {
+                operation: operationName,
+                model: currentModel,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              throw new AppError(
+                `AI response did not match expected schema for ${operationName}: ${err instanceof Error ? err.message : String(err)}`,
+                502,
+                'AI_SCHEMA_INVALID'
+              );
+            }
+          } catch (err) {
+            clearTimeout(timeoutId);
+
+            // Re-throw AppErrors as-is
+            if (err instanceof AppError) throw err;
+
+            const message = err instanceof Error ? err.message : String(err);
+            const errName = err instanceof Error ? err.name : 'unknown';
+            const elapsed = Date.now() - startMs;
+
+            logger.error('Gemini API call failed', {
+              operation: operationName,
+              model: currentModel,
+              errorName: errName,
+              errorMessage: message.substring(0, 300),
+              durationMs: elapsed,
+            });
+
+            // Timeout (AbortController)
+            if (errName === 'AbortError' || message.includes('abort')) {
+              throw new AppError(
+                `AI request timed out after ${Math.round(elapsed / 1000)}s for ${operationName}`,
+                504,
+                'AI_TIMEOUT'
+              );
+            }
+
+            // Rate limiting
+            if (message.includes('429') || message.toLowerCase().includes('rate limit') || message.toLowerCase().includes('quota')) {
+              throw new AppError(
+                'AI service rate limit reached. Please wait a moment.',
+                429,
+                'AI_RATE_LIMITED'
+              );
+            }
+
+            // Invalid model
+            if (message.includes('not found') || message.includes('not supported') || message.includes('404')) {
+              throw new AppError(
+                `AI model "${currentModel}" is not available. Check GEMINI_MODEL configuration.`,
+                400,
+                'AI_UNAVAILABLE'
+              );
+            }
+
+            // Auth errors
+            if (message.includes('401') || message.includes('403') || message.includes('PERMISSION_DENIED') || message.includes('API key')) {
+              throw new AppError(
+                'AI authentication failed. Check your GEMINI_API_KEY.',
+                401,
+                'AI_UNAVAILABLE'
+              );
+            }
+
+            // Network errors
+            if (message.includes('fetch') || message.includes('network') || message.includes('ECONNRESET')) {
+              throw new AppError(
+                `AI connection failed for ${operationName}. Please check network or retry.`,
+                503,
+                'AI_UNAVAILABLE'
+              );
+            }
+
+            // Default
+            throw new AppError(
+              `AI analysis failed for ${operationName}: ${message.substring(0, 200)}`,
+              502,
+              'AI_PROVIDER_ERROR'
+            );
+          }
         });
-
-        clearTimeout(timeoutId);
-
-        // Check finish reason
-        const candidate = response.candidates?.[0];
-        const finishReason = candidate?.finishReason;
-
-        if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
-          logger.warn('Gemini non-STOP finish', {
-            operation: operationName,
-            finishReason,
-            durationMs: Date.now() - startMs,
-          });
-          throw new AppError(
-            `AI response for ${operationName} was not completed: ${finishReason}`,
-            502,
-            'AI_BLOCKED_RESPONSE'
-          );
-        }
-
-        // Also check prompt-level block
-        if (response.promptFeedback?.blockReason) {
-          throw new AppError(
-            `Request was blocked by AI safety filters: ${response.promptFeedback.blockReason}`,
-            400,
-            'AI_BLOCKED_RESPONSE'
-          );
-        }
-
-        const text = response.text ?? '';
-        if (!text || text.trim().length === 0) {
-          throw new AppError(
-            `Empty response from AI for ${operationName}`,
-            502,
-            'AI_EMPTY_RESPONSE'
-          );
-        }
-
-        // Strip markdown code fences if model wraps JSON in them
-        const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(cleaned);
-        } catch {
-          logger.warn('Gemini returned malformed JSON', {
-            operation: operationName,
-            textLength: cleaned.length,
-            textPreview: cleaned.substring(0, 200),
-          });
-          throw new AppError(
-            `AI returned malformed JSON for ${operationName}`,
-            502,
-            'AI_INVALID_RESPONSE'
-          );
-        }
-
-        try {
-          const validated = schema.parse(parsed);
-          logger.info('AI operation completed', {
-            operation: operationName,
-            model: MODEL_NAME,
-            durationMs: Date.now() - startMs,
-          });
-          return validated;
-        } catch (err) {
-          logger.warn('Gemini schema validation failed', {
-            operation: operationName,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          throw new AppError(
-            `AI response did not match expected schema for ${operationName}: ${err instanceof Error ? err.message : String(err)}`,
-            502,
-            'AI_SCHEMA_INVALID'
-          );
-        }
       } catch (err) {
-        clearTimeout(timeoutId);
+        lastError = err;
+        const isModelUnavailable =
+          err instanceof AppError &&
+          err.code === 'AI_UNAVAILABLE' &&
+          (err.message.includes('not available') || err.message.includes('not found') || err.message.includes('not supported'));
 
-        // Re-throw AppErrors as-is
-        if (err instanceof AppError) throw err;
-
-        const message = err instanceof Error ? err.message : String(err);
-        const errName = err instanceof Error ? err.name : 'unknown';
-        const elapsed = Date.now() - startMs;
-
-        logger.error('Gemini API call failed', {
-          operation: operationName,
-          model: MODEL_NAME,
-          errorName: errName,
-          errorMessage: message.substring(0, 300),
-          durationMs: elapsed,
-        });
-
-        // Timeout (AbortController)
-        if (errName === 'AbortError' || message.includes('abort')) {
-          throw new AppError(
-            `AI request timed out after ${Math.round(elapsed / 1000)}s for ${operationName}`,
-            504,
-            'AI_TIMEOUT'
-          );
+        if (isModelUnavailable && modelIdx < modelsToTry.length - 1) {
+          logger.warn('AI model unavailable, trying fallback model', {
+            failedModel: currentModel,
+            nextModel: modelsToTry[modelIdx + 1],
+            operation: operationName,
+          });
+          continue;
         }
 
-        // Rate limiting
-        if (message.includes('429') || message.toLowerCase().includes('rate limit') || message.toLowerCase().includes('quota')) {
-          throw new AppError(
-            'AI service rate limit reached. Please wait a moment.',
-            429,
-            'AI_RATE_LIMITED'
-          );
-        }
-
-        // Invalid model
-        if (message.includes('not found') || message.includes('not supported') || message.includes('404')) {
-          throw new AppError(
-            `AI model "${MODEL_NAME}" is not available. Check GEMINI_MODEL configuration.`,
-            400,
-            'AI_UNAVAILABLE'
-          );
-        }
-
-        // Auth errors
-        if (message.includes('401') || message.includes('403') || message.includes('PERMISSION_DENIED') || message.includes('API key')) {
-          throw new AppError(
-            'AI authentication failed. Check your GEMINI_API_KEY.',
-            401,
-            'AI_UNAVAILABLE'
-          );
-        }
-
-        // Network errors
-        if (message.includes('fetch') || message.includes('network') || message.includes('ECONNRESET')) {
-          throw new AppError(
-            `Network error communicating with AI service: ${message}`,
-            502,
-            'AI_PROVIDER_ERROR'
-          );
-        }
-
-        throw new AppError(
-          `Gemini API error for ${operationName}: ${message.substring(0, 200)}`,
-          502,
-          'AI_PROVIDER_ERROR'
-        );
+        throw err;
       }
-    }, { maxRetries: 2, baseDelayMs: 1000 });
+    }
+
+    throw lastError;
   }
 
   async summarizeDocument(chunks: DocumentChunk[], _fullText: string): Promise<DocumentSummary> {
