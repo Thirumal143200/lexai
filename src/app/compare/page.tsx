@@ -96,7 +96,7 @@ function CompareContent() {
       <div className="notice notice-info" style={{ marginBottom: 'var(--space-6)' }}>
         <span aria-hidden="true">ℹ</span>
         <div style={{ fontSize: '0.8125rem' }}>
-          <strong>Comparison Guidance:</strong> LexAI evaluates semantic differences across key categories (liability, termination, indemnification, IP). Use these insights to identify which agreement offers superior contractual protection before negotiation.
+          <strong>Comparison Guidance:</strong> LexAI evaluates semantic differences across key categories (liability, termination, indemnification, IP, payment, warranties). It presents objective, document-grounded comparisons to assist your review, without ranking agreements or drawing legal conclusions.
         </div>
       </div>
 

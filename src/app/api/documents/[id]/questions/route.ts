@@ -14,6 +14,7 @@ import {
   getQuestionsByDocumentId,
 } from '@/lib/db/queries';
 import { validateDocumentId, validateQuestion } from '@/lib/security/validator';
+import { checkRateLimit, getClientIp } from '@/lib/security/rate-limiter';
 import { toApiError, AppError } from '@/lib/utils/errors';
 import { getAIProvider } from '@/lib/ai';
 import { retrieveRelevantChunks } from '@/lib/rag/retriever';
@@ -47,6 +48,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
 export async function POST(req: NextRequest, { params }: RouteParams) {
   try {
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit('qa', ip, 30, 60);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Question rate limit reached. Please wait a moment before asking another question.', code: 'RATE_LIMITED' },
+        { status: 429, headers: { 'Retry-After': String(rateCheck.resetSeconds) } }
+      );
+    }
+
     const { id } = await params;
     const documentId = validateDocumentId(id);
     const db = getDb();

@@ -1,4 +1,5 @@
-import { validateUploadedFile, validateDocumentId, validateQuestion } from '@/lib/security/validator';
+import { validateUploadedFile, validateDocumentId, validateQuestion, validateFileBuffer } from '@/lib/security/validator';
+import { checkRateLimit } from '@/lib/security/rate-limiter';
 import { AppError } from '@/lib/utils/errors';
 
 describe('Security and Input Validator', () => {
@@ -77,6 +78,51 @@ describe('Security and Input Validator', () => {
     it('rejects excessively long question', () => {
       const longQ = 'a'.repeat(1500);
       expect(() => validateQuestion(longQ)).toThrow(AppError);
+    });
+  });
+
+  describe('validateFileBuffer (Magic Bytes Validation)', () => {
+    it('accepts valid PDF magic bytes (%PDF)', () => {
+      const pdfBuffer = Buffer.from('%PDF-1.7 header content');
+      expect(() => validateFileBuffer(pdfBuffer, '.pdf')).not.toThrow();
+    });
+
+    it('rejects spoofed PDF without %PDF magic bytes', () => {
+      const spoofed = Buffer.from('MZ\x90\x00 fake executable');
+      expect(() => validateFileBuffer(spoofed, '.pdf')).toThrow(AppError);
+    });
+
+    it('accepts valid DOCX magic bytes (PKzip header)', () => {
+      const docxBuffer = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]);
+      expect(() => validateFileBuffer(docxBuffer, '.docx')).not.toThrow();
+    });
+
+    it('rejects spoofed DOCX without PK header', () => {
+      const spoofed = Buffer.from('Not a real zip archive');
+      expect(() => validateFileBuffer(spoofed, '.docx')).toThrow(AppError);
+    });
+
+    it('accepts valid UTF-8 text file', () => {
+      const textBuffer = Buffer.from('Standard agreement text.');
+      expect(() => validateFileBuffer(textBuffer, '.txt')).not.toThrow();
+    });
+
+    it('rejects binary file with null bytes spoofed as .txt', () => {
+      const binary = Buffer.from([0x00, 0x00, 0x00, 0x05, 0x12, 0x34]);
+      expect(() => validateFileBuffer(binary, '.txt')).toThrow(AppError);
+    });
+  });
+
+  describe('checkRateLimit', () => {
+    it('allows requests within threshold and blocks excess requests', () => {
+      const ip = 'test-client-ip-' + Date.now();
+      for (let i = 0; i < 5; i++) {
+        const res = checkRateLimit('unit-test', ip, 5, 10);
+        expect(res.allowed).toBe(true);
+      }
+      const blocked = checkRateLimit('unit-test', ip, 5, 10);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.resetSeconds).toBeGreaterThan(0);
     });
   });
 });

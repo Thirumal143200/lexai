@@ -5,11 +5,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { getDocumentById, getChunksByDocumentId, getAnalysis } from '@/lib/db/queries';
+import { getDocumentById, getChunksByDocumentId, getAnalysis, upsertAnalysis } from '@/lib/db/queries';
 import { validateDocumentId } from '@/lib/security/validator';
 import { toApiError, AppError } from '@/lib/utils/errors';
 import { getAIProvider } from '@/lib/ai';
-import type { DocumentSummary, RiskAnalysisResult } from '@/lib/ai/schemas';
+import type { DocumentSummary, RiskAnalysisResult, DocumentReviewBrief } from '@/lib/ai/schemas';
 
 interface RouteParams { params: Promise<{ id: string }> }
 
@@ -17,12 +17,20 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     const documentId = validateDocumentId(id);
+    const force = req.nextUrl.searchParams.get('force') === 'true';
 
     const db = getDb();
     const document = getDocumentById(db, documentId);
     if (!document) throw new AppError('Document not found.', 404, 'NOT_FOUND');
     if (document.status !== 'ready') {
       return NextResponse.json({ error: 'Document is still being processed.' }, { status: 202 });
+    }
+
+    if (!force) {
+      const cached = getAnalysis<DocumentReviewBrief>(db, documentId, 'review_brief');
+      if (cached) {
+        return NextResponse.json({ reviewBrief: cached, cached: true });
+      }
     }
 
     const chunks = getChunksByDocumentId(db, documentId);
@@ -36,8 +44,9 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     const risksData = risks ?? await provider.analyzeRisks(chunks, summaryData);
 
     const reviewBrief = await provider.generateDocumentReviewBrief(chunks, summaryData, risksData);
+    upsertAnalysis(db, documentId, 'review_brief', reviewBrief, 'gemini');
 
-    return NextResponse.json({ reviewBrief });
+    return NextResponse.json({ reviewBrief, cached: false });
   } catch (err) {
     const apiErr = toApiError(err);
     return NextResponse.json({ error: apiErr.error }, { status: apiErr.statusCode });

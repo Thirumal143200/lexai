@@ -199,3 +199,35 @@ export function getQuestionsByDocumentId(db: Database.Database, documentId: stri
     'SELECT * FROM questions WHERE document_id = ? ORDER BY created_at DESC'
   ).all(documentId) as QuestionRow[];
 }
+
+// ─── Comparison queries ──────────────────────────────────────────────────────
+
+export function getComparison<T>(
+  db: Database.Database,
+  documentAId: string,
+  documentBId: string
+): T | null {
+  const row = db.prepare(`
+    SELECT result_json FROM comparisons 
+    WHERE (document_a_id = ? AND document_b_id = ?) 
+       OR (document_a_id = ? AND document_b_id = ?)
+    ORDER BY created_at DESC LIMIT 1
+  `).get(documentAId, documentBId, documentBId, documentAId) as { result_json: string } | undefined;
+
+  if (!row) return null;
+  return JSON.parse(row.result_json) as T;
+}
+
+export function saveComparison(
+  db: Database.Database,
+  documentAId: string,
+  documentBId: string,
+  result: unknown
+): void {
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO comparisons (id, document_a_id, document_b_id, result_json, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, documentAId, documentBId, JSON.stringify(result), new Date().toISOString());
+}
+

@@ -73,4 +73,5 @@ CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON document_chunks(document_id
 CREATE INDEX IF NOT EXISTS idx_analyses_document_id ON analyses(document_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_type ON analyses(document_id, type);
 CREATE INDEX IF NOT EXISTS idx_questions_document_id ON questions(document_id);
+CREATE INDEX IF NOT EXISTS idx_comparisons_docs ON comparisons(document_a_id, document_b_id);
 `;

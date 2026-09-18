@@ -123,3 +123,42 @@ export function validateQuestion(question: unknown): string {
   // Strip HTML/script tags that could be injection attempts
   return trimmed.replace(/<[^>]*>/g, '');
 }
+
+/**
+ * Validates the raw file buffer content using magic bytes and structural inspection.
+ * Ensures the actual binary payload matches the declared file extension, preventing MIME/extension spoofing.
+ */
+export function validateFileBuffer(buffer: Buffer, extension: string): void {
+  const ext = extension.toLowerCase();
+
+  if (ext === '.pdf') {
+    if (buffer.length < 5) {
+      throw new AppError('The uploaded file is too small to be a valid PDF.', 422, 'INVALID_PDF');
+    }
+    const header = buffer.subarray(0, 5).toString('ascii');
+    if (!header.startsWith('%PDF')) {
+      throw new AppError('The file content does not match a valid PDF document (missing %PDF signature).', 422, 'INVALID_PDF');
+    }
+  } else if (ext === '.docx') {
+    if (buffer.length < 4) {
+      throw new AppError('The uploaded file is too small to be a valid DOCX document.', 422, 'UNSUPPORTED_FILE_TYPE');
+    }
+    // DOCX files are standard OpenXML zip archives beginning with PK\x03\x04
+    if (buffer[0] !== 0x50 || buffer[1] !== 0x4B || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
+      throw new AppError('The file content does not match a valid DOCX document (missing PK signature).', 422, 'UNSUPPORTED_FILE_TYPE');
+    }
+  } else if (ext === '.txt') {
+    if (buffer.length === 0) {
+      throw new AppError('The text document is empty.', 400, 'EMPTY_DOCUMENT');
+    }
+    // Check for null bytes which indicate a binary file disguised as text
+    const sample = buffer.subarray(0, Math.min(buffer.length, 1024));
+    let nullByteCount = 0;
+    for (let i = 0; i < sample.length; i++) {
+      if (sample[i] === 0) nullByteCount++;
+    }
+    if (nullByteCount > 2) {
+      throw new AppError('The file contains binary data and is not a valid plain text document.', 422, 'UNSUPPORTED_FILE_TYPE');
+    }
+  }
+}

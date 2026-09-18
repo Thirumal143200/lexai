@@ -83,6 +83,47 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [reviewBrief, setReviewBrief] = useState<DocumentReviewBrief | null>(null);
   const [loadingReviewBrief, setLoadingReviewBrief] = useState(false);
   const [reviewBriefError, setReviewBriefError] = useState<string | null>(null);
+  const [checkedObligations, setCheckedObligations] = useState<Record<number, boolean>>({});
+  const [completedSteps, setCompletedSteps] = useState<Record<number, boolean>>({});
+  const [copiedBrief, setCopiedBrief] = useState(false);
+  const [copiedObligations, setCopiedObligations] = useState(false);
+
+  const handleCopyBrief = () => {
+    if (!reviewBrief) return;
+    const content = [
+      `# Legal Review Brief: ${doc?.original_name || 'Document'}`,
+      `Document Purpose: ${reviewBrief.documentPurpose}`,
+      `Parties: ${reviewBrief.parties.join(', ')}`,
+      `Key Clauses: ${reviewBrief.majorClauses.join(', ')}`,
+      '',
+      '## Recommended Next Steps',
+      ...reviewBrief.nextSteps.map((s, i) => `${i + 1}. [${s.category}] ${s.action}\n   Reason: ${s.reason}${s.source ? ` (${s.source})` : ''}`),
+      '',
+      '## Questions to Consider for Legal Professional / Counterparty',
+      ...reviewBrief.questionsToConsider.map((q, i) => `${i + 1}. [${q.category}] ${q.question}\n   Why: ${q.reason}${q.source ? ` (${q.source})` : ''}`),
+      '',
+      '---\n*Notice: LexAI provides document-grounded review prompts and legal information, not formal legal advice.*',
+    ].join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedBrief(true);
+      setTimeout(() => setCopiedBrief(false), 2500);
+    });
+  };
+
+  const handleCopyObligations = () => {
+    if (!obligationsData) return;
+    const content = [
+      `# Contractual Obligations Matrix: ${doc?.original_name || 'Document'}`,
+      ...obligationsData.map((ob, i) => {
+        const checked = checkedObligations[i] ? '[x]' : '[ ]';
+        return `${checked} Party: ${ob.party}\n   Obligation: ${ob.obligation}\n   Trigger/Deadline: ${ob.deadline || ob.trigger || 'Ongoing'}\n   Clause: ${ob.sourceSection}\n   Consequence: ${ob.consequence || 'Unspecified'}\n   Review Action: ${ob.statusOrReviewAction || 'Review'}\n`;
+      }),
+    ].join('\n');
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedObligations(true);
+      setTimeout(() => setCopiedObligations(false), 2500);
+    });
+  };
 
   // 1. Fetch Document Info
   const fetchDoc = useCallback(async () => {
@@ -464,15 +505,141 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
+        {/* Visual Legal Review Workflow Stepper */}
+        <div
+          role="navigation"
+          aria-label="Legal review workflow stages"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            background: 'var(--color-surface-2)',
+            border: '1px solid var(--color-border)',
+            padding: 'var(--space-2) var(--space-4)',
+            borderRadius: 'var(--radius-sm)',
+            marginBottom: 'var(--space-4)',
+            overflowX: 'auto',
+            fontSize: '0.8125rem',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.75rem' }}>
+            Workflow:
+          </span>
+          <span style={{ color: 'var(--color-risk-low)', fontWeight: 600 }}>1. Upload ✓</span>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('understand')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'understand' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'understand' ? 600 : 400,
+            }}
+          >
+            2. Understand
+          </button>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('identify-clauses')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'identify-clauses' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'identify-clauses' ? 600 : 400,
+            }}
+          >
+            3. Identify Clauses
+          </button>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('identify-risks')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'identify-risks' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'identify-risks' ? 600 : 400,
+            }}
+          >
+            4. Review Risks
+          </button>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('identify-obligations')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'identify-obligations' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'identify-obligations' ? 600 : 400,
+            }}
+          >
+            5. Track Obligations
+          </button>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <Link
+            href={`/compare?a=${doc.id}`}
+            style={{
+              color: 'var(--color-accent)',
+              textDecoration: 'none',
+              fontWeight: 500,
+              padding: '2px 6px',
+            }}
+          >
+            6. Compare Agreements ⇄
+          </Link>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('ask')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'ask' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'ask' ? 600 : 400,
+            }}
+          >
+            7. Grounded Q&amp;A
+          </button>
+          <span style={{ color: 'var(--color-text-3)' }}>→</span>
+          <button
+            onClick={() => setActiveTab('prepare')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              color: activeTab === 'prepare' ? 'var(--color-accent)' : 'var(--color-text)',
+              fontWeight: activeTab === 'prepare' ? 600 : 400,
+            }}
+          >
+            8. Prepare Next Steps
+          </button>
+        </div>
+
         {/* Workspace Tab Navigation */}
         <div style={{ display: 'flex', gap: 'var(--space-2)', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-6)', overflowX: 'auto' }}>
           {[
-            { id: 'understand', label: 'Understand' },
-            { id: 'identify-clauses', label: 'Identify: Clauses' },
-            { id: 'identify-risks', label: 'Identify: Risks' },
-            { id: 'identify-obligations', label: 'Identify: Obligations' },
-            { id: 'ask', label: 'Ask' },
-            { id: 'prepare', label: 'Act / Prepare' },
+            { id: 'understand', label: '1. Understand (Summary)' },
+            { id: 'identify-clauses', label: '2. Important Clauses' },
+            { id: 'identify-risks', label: '3. Risk & Red Flags' },
+            { id: 'identify-obligations', label: '4. Obligations Matrix' },
+            { id: 'ask', label: '5. Grounded Q&A' },
+            { id: 'prepare', label: '6. Next Steps & Brief' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -987,35 +1154,72 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
               </div>
             ) : (
               <div className="card">
-                <div className="card-header">
-                  <h3 className="card-title">Contractual Obligations Matrix</h3>
-                  <p className="card-description">Track affirmative and negative duties, timelines, and breach consequences</p>
+                <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                  <div>
+                    <h3 className="card-title">Contractual Obligations Matrix</h3>
+                    <p className="card-description">
+                      Track affirmative and negative duties, timelines, breach consequences, and review progress ({Object.values(checkedObligations).filter(Boolean).length} of {obligationsData.length} completed)
+                    </p>
+                  </div>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleCopyObligations}
+                  >
+                    {copiedObligations ? '✓ Copied Matrix!' : '📋 Copy Checklist'}
+                  </button>
                 </div>
-                <div className="card-body" style={{ padding: 0 }}>
+                <div className="card-body" style={{ padding: 0, overflowX: 'auto' }}>
                   <table className="table" style={{ width: '100%' }}>
                     <thead>
                       <tr>
-                        <th>Responsible Party</th>
+                        <th style={{ width: '40px', textAlign: 'center' }}>Done</th>
+                        <th>Party</th>
                         <th>Obligation</th>
-                        <th>Deadline / Trigger</th>
+                        <th>Condition / Trigger</th>
+                        <th>Deadline</th>
+                        <th>Clause / Section</th>
                         <th>Consequence / Penalty</th>
                         <th>Review Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {obligationsData.map((ob, idx) => (
-                        <tr key={idx}>
-                          <td style={{ fontWeight: 600 }}>{ob.party}</td>
-                          <td style={{ fontSize: '0.875rem', color: 'var(--color-text-2)' }}>{ob.obligation}</td>
-                          <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>{ob.deadline || ob.trigger || 'Ongoing'}</td>
-                          <td style={{ fontSize: '0.8125rem', color: 'var(--color-risk-high)' }}>
-                            {ob.consequence || 'Unspecified'}
-                          </td>
-                          <td style={{ fontSize: '0.8125rem', color: 'var(--color-accent)' }}>
-                            {ob.statusOrReviewAction || 'Review'}
-                          </td>
-                        </tr>
-                      ))}
+                      {obligationsData.map((ob, idx) => {
+                        const isDone = !!checkedObligations[idx];
+                        return (
+                          <tr key={idx} style={{ opacity: isDone ? 0.65 : 1, background: isDone ? 'var(--color-surface-2)' : undefined }}>
+                            <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                              <input
+                                type="checkbox"
+                                checked={isDone}
+                                aria-label={`Mark obligation by ${ob.party} as reviewed`}
+                                onChange={(e) => setCheckedObligations((prev) => ({ ...prev, [idx]: e.target.checked }))}
+                                style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                              />
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{ob.party}</td>
+                            <td style={{ fontSize: '0.875rem', color: 'var(--color-text)', textDecoration: isDone ? 'line-through' : 'none' }}>
+                              {ob.obligation}
+                            </td>
+                            <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>
+                              {ob.condition || ob.trigger || 'Unconditional'}
+                            </td>
+                            <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-2)', fontWeight: ob.deadline ? 500 : 400 }}>
+                              {ob.deadline || 'Ongoing'}
+                            </td>
+                            <td style={{ fontSize: '0.75rem', color: 'var(--color-text-3)' }}>
+                              {ob.sourceSection || 'General'}
+                            </td>
+                            <td style={{ fontSize: '0.8125rem', color: 'var(--color-risk-high)' }}>
+                              {ob.consequence || 'Default remedies'}
+                            </td>
+                            <td>
+                              <span className="badge badge-accent">
+                                {ob.statusOrReviewAction || 'Review'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1154,10 +1358,25 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
         {/* ── TAB 6: ACT / PREPARE ── */}
         {activeTab === 'prepare' && (
           <div aria-live="polite">
+            {/* Responsible AI Disclaimer */}
+            <div className="notice notice-info" style={{ marginBottom: 'var(--space-4)' }}>
+              <span aria-hidden="true">ℹ</span>
+              <div style={{ fontSize: '0.8125rem' }}>
+                <strong>Legal Consultation Notice:</strong> These next steps and questions are document-grounded review prompts synthesized directly from your agreement, not legal recommendations. Use them to prepare for an informed consultation with a qualified legal professional or negotiation session.
+              </div>
+            </div>
+
             <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
-              <div className="card-header">
-                <h3 className="card-title">Legal Review Brief</h3>
-                <p className="card-description">Actionable next steps and specific questions to help you prepare for a consultation or negotiation.</p>
+              <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                <div>
+                  <h3 className="card-title">Legal Review Brief &amp; Preparation</h3>
+                  <p className="card-description">Document context, prioritized next steps, and questions to ask your attorney</p>
+                </div>
+                {reviewBrief && (
+                  <button className="btn btn-secondary btn-sm" onClick={handleCopyBrief}>
+                    {copiedBrief ? '✓ Copied Brief!' : '📋 Copy Brief & Questions'}
+                  </button>
+                )}
               </div>
 
               <div className="card-body">
@@ -1202,18 +1421,52 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
                     {/* Next Steps */}
                     <div>
-                      <h4 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: 'var(--space-3)' }}>Recommended Next Steps</h4>
+                      <h4 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: 'var(--space-3)' }}>
+                        Recommended Next Steps ({reviewBrief.nextSteps.length})
+                      </h4>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                        {reviewBrief.nextSteps.map((step, idx) => (
-                          <div key={idx} style={{ padding: 'var(--space-3)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-                            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-1)' }}>
-                              <span className="badge badge-accent">{step.category}</span>
-                              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{step.action}</span>
+                        {reviewBrief.nextSteps.map((step, idx) => {
+                          const isDone = !!completedSteps[idx];
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: 'var(--space-3)',
+                                padding: 'var(--space-3)',
+                                border: '1px solid var(--color-border)',
+                                borderRadius: 'var(--radius-sm)',
+                                background: isDone ? 'var(--color-surface-2)' : 'var(--color-surface)',
+                                opacity: isDone ? 0.65 : 1,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isDone}
+                                aria-label={`Mark step as completed: ${step.action}`}
+                                onChange={(e) => setCompletedSteps((prev) => ({ ...prev, [idx]: e.target.checked }))}
+                                style={{ cursor: 'pointer', marginTop: '4px', width: '16px', height: '16px' }}
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-1)', flexWrap: 'wrap' }}>
+                                  <span className="badge badge-accent">{step.category}</span>
+                                  <span style={{ fontWeight: 600, fontSize: '0.9375rem', textDecoration: isDone ? 'line-through' : 'none' }}>
+                                    {step.action}
+                                  </span>
+                                </div>
+                                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-2)', marginTop: '4px' }}>
+                                  <strong>Reason:</strong> {step.reason}
+                                </p>
+                                {step.source && (
+                                  <p style={{ fontSize: '0.75rem', color: 'var(--color-text-3)', marginTop: '2px' }}>
+                                    Source: {step.source}
+                                  </p>
+                                )}
+                              </div>
                             </div>
-                            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-2)', marginTop: '4px' }}><strong>Reason:</strong> {step.reason}</p>
-                            {step.source && <p style={{ fontSize: '0.75rem', color: 'var(--color-text-3)', marginTop: '2px' }}>Source: {step.source}</p>}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 
