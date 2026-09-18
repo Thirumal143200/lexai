@@ -294,8 +294,17 @@ export class GeminiProvider implements AIProvider {
               );
             }
 
-            // Invalid model
-            if (message.includes('not found') || message.includes('not supported') || message.includes('404')) {
+            // High demand / service overload (503)
+            if (message.includes('503') || message.toLowerCase().includes('high demand') || message.includes('UNAVAILABLE')) {
+              throw new AppError(
+                `AI model "${currentModel}" is temporarily overloaded: ${message}`,
+                503,
+                'AI_UNAVAILABLE'
+              );
+            }
+
+            // Invalid or deprecated model
+            if (message.includes('not found') || message.includes('not supported') || message.includes('404') || message.includes('no longer available')) {
               throw new AppError(
                 `AI model "${currentModel}" is not available: ${message}`,
                 400,
@@ -328,13 +337,18 @@ export class GeminiProvider implements AIProvider {
               'AI_PROVIDER_ERROR'
             );
           }
-        });
+        }, { maxRetries: 1, baseDelayMs: 500 });
       } catch (err) {
         lastError = err;
         const isModelUnavailable =
           err instanceof AppError &&
           err.code === 'AI_UNAVAILABLE' &&
-          (err.message.includes('not available') || err.message.includes('not found') || err.message.includes('not supported'));
+          (err.message.includes('not available') ||
+            err.message.includes('not found') ||
+            err.message.includes('not supported') ||
+            err.message.includes('overloaded') ||
+            err.message.includes('high demand') ||
+            err.message.includes('longer available'));
 
         if (isModelUnavailable && modelIdx < modelsToTry.length - 1) {
           logger.warn('AI model unavailable, trying fallback model', {
