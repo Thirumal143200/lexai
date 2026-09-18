@@ -82,11 +82,13 @@ Copy `.env.example` to `.env.local`:
 cp .env.example .env.local
 ```
 
-Set your Gemini API key:
+Configure your Gemini settings:
 ```env
 GEMINI_API_KEY=your_google_gemini_api_key_here
+GEMINI_PRIMARY_MODEL=gemini-2.5-flash        # Default primary model
+GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite   # Automatic fallback on rate-limits/503
 ```
-*(If left empty, LexAI automatically operates in local mock mode for zero-configuration testing).*
+*(If left empty or if all live models hit rate limits, LexAI automatically operates in local grounded analysis mode for zero-configuration resilience).*
 
 ### Running the App
 ```bash
@@ -98,7 +100,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ```bash
 npm test
 ```
-Runs the complete test suite: **60 unit, integration, and security tests across 10 test suites**.
+Runs the complete test suite: **100 unit, integration, resilience, and security tests across 14 test suites**.
 
 ### Building for Production
 ```bash
