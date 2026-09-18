@@ -1,0 +1,19 @@
+# Render deployment blueprint for LexAI
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: lexai
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
