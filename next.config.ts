@@ -50,7 +50,14 @@ const nextConfig: NextConfig = {
    * Packages only the minimal server code needed, without the full node_modules tree.
    * Remove this if deploying to Vercel (Vercel handles bundling automatically).
    */
-  // output: "standalone",
+  output: "standalone",
+
+  /**
+   * Externalize native / complex modules from the server bundle.
+   * pdf-parse uses PDF.js with worker threads; better-sqlite3 is a native addon.
+   * Bundling these breaks their runtime behaviour on Render/Node 22+.
+   */
+  serverExternalPackages: ['pdf-parse', 'better-sqlite3', 'mammoth'],
 };
 
 export default nextConfig;

@@ -13,6 +13,8 @@ export type ErrorCode =
   | 'FILE_TOO_LARGE'
   | 'UNSUPPORTED_FILE_TYPE'
   | 'EMPTY_DOCUMENT'
+  | 'INVALID_PDF'
+  | 'PASSWORD_PROTECTED'
   | 'EXTRACTION_FAILED'
   | 'AI_UNAVAILABLE'
   | 'AI_EMPTY_RESPONSE'
@@ -58,6 +60,8 @@ export const USER_MESSAGES: Record<ErrorCode, string> = {
   FILE_TOO_LARGE: 'The file is too large. Maximum size is 10 MB.',
   UNSUPPORTED_FILE_TYPE: 'This file type is not supported. Please upload a PDF, DOCX, or TXT file.',
   EMPTY_DOCUMENT: 'No readable text was found in the document. The file may be scanned or image-based.',
+  INVALID_PDF: 'The PDF file appears to be corrupted or is not a valid PDF.',
+  PASSWORD_PROTECTED: 'This PDF is password-protected. Please remove the password and try again.',
   EXTRACTION_FAILED: 'The document could not be read. It may be corrupted or password-protected.',
   AI_UNAVAILABLE: 'The analysis service is currently unavailable. Please check your API configuration.',
   AI_EMPTY_RESPONSE: 'The AI returned an incomplete response. Please try again.',

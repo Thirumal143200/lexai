@@ -35,7 +35,10 @@ export async function POST(req: NextRequest) {
     // Validate before reading full content
     const validated = validateUploadedFile(file.name, file.type, file.size);
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    // Defensively create Buffer — some Next.js runtimes on Node 26 produce
+    // Uint8Array or detached ArrayBuffer from file.arrayBuffer()
+    const arrayBuf = await file.arrayBuffer();
+    const buffer = Buffer.from(new Uint8Array(arrayBuf));
     const db = getDb();
 
     // Create DB record first so we have a stable ID
