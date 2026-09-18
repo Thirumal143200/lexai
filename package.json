@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build && npm run postbuild",
     "postbuild": "node -e \"const fs=require('fs');const p=require('path');function cp(s,d){if(!fs.existsSync(s))return;fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync(s)){const sp=p.join(s,f),dp=p.join(d,f);fs.statSync(sp).isDirectory()?cp(sp,dp):fs.copyFileSync(sp,dp)}}cp('public','.next/standalone/public');cp('.next/static','.next/standalone/.next/static');console.log('Copied static assets to standalone')\"",
-    "start": "node .next/standalone/server.js",
+    "start": "node server.js",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "jest"
