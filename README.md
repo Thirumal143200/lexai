@@ -14,8 +14,8 @@ LexAI is an opinionated, production-grade legal document intelligence workstatio
 - Builds an indexed glossary of defined legal terms.
 
 ### 2. Structured Clause Breakdown
-- Categorizes clauses into termination, liability, indemnification, intellectual property, confidentiality, payment, and warranties.
-- Provides side-by-side original contract text and plain-English meanings.
+- Categorizes clauses using a robust canonical classification system (8 core legal categories) with deterministic normalization and weighted phrase matching.
+- Provides accessible, filterable side-by-side original contract text and plain-English meanings.
 - Flags risk levels and assesses contract favourability.
 
 ### 3. Risk & Red-Flag Audit
@@ -88,7 +88,7 @@ GEMINI_API_KEY=your_google_gemini_api_key_here
 GEMINI_PRIMARY_MODEL=gemini-2.5-flash        # Default primary model
 GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite   # Automatic fallback on rate-limits/503
 ```
-*(If left empty or if all live models hit rate limits, LexAI automatically operates in local grounded analysis mode for zero-configuration resilience).*
+*(If left empty or if all live models hit rate limits, LexAI's Resilient AI Provider automatically falls back to a deterministic local content-aware analysis mode for zero-configuration resilience).*
 
 ### Running the App
 ```bash
@@ -141,27 +141,33 @@ LexAI uses **local SQLite + local filesystem** for document storage. This means:
 
 | Platform | SQLite | File Uploads | Notes |
 |---|---|---|---|
-| **Railway** | ✅ Persistent | ✅ Persistent | **Recommended for demos** |
-| **Render** | ✅ Persistent | ✅ Persistent | Use persistent disk addon |
+| **Render** | ✅ Persistent | ✅ Persistent | **Recommended** (Next.js Standalone + Persistent Disk) |
+| **Railway** | ✅ Persistent | ✅ Persistent | Supported with volume mounts |
 | **Fly.io** | ✅ Persistent | ✅ Persistent | Use volume mount |
 | **Vercel** | ⚠️ Ephemeral | ⚠️ Ephemeral | Data lost on redeploy — not suitable without external DB |
 | **Local** | ✅ Persistent | ✅ Persistent | Default, works out of the box |
 
-### Deploying to Railway (Recommended)
+### Deploying to Render (Recommended)
+
+LexAI is pre-configured for deployment on Render using Next.js standalone output.
 
 1. Fork or push this repo to GitHub
-2. Create a new project at [railway.app](https://railway.app)
+2. Create a new Web Service at [render.com](https://render.com)
 3. Connect your GitHub repo
-4. Set environment variables in Railway dashboard:
+4. Configure the Web Service:
+   - **Environment**: Node (Version 22.x)
+   - **Build Command**: `npm run build`
+   - **Start Command**: `node .next/standalone/server.js`
+5. Set environment variables:
    ```
    GEMINI_API_KEY=your_key_here
-   GEMINI_MODEL=gemini-1.5-flash
-   DB_DIR=/app/data
-   UPLOAD_DIR=/app/data/uploads
+   GEMINI_PRIMARY_MODEL=gemini-2.5-flash
+   GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
+   HOSTNAME=0.0.0.0
    ```
-5. Railway will auto-detect Next.js and deploy
+6. Add a **Persistent Disk** mounted to the directory configured in your environment (e.g. `/opt/render/project/src/data`) for SQLite and uploads.
 
-The included [`railway.toml`](./railway.toml) configures the health check path and restart policy.
+The included `render.yaml` configuration file can be used for automated setup.
 
 ### Environment Variables
 
