@@ -1,15 +1,17 @@
 /**
  * Google Gemini AI Provider implementation.
  *
+ * Uses the @google/genai SDK (current) with gemini-2.5-flash (default).
+ *
  * Error pipeline:
- *   API call → candidate/finishReason inspection → content extraction
+ *   API call → finishReason inspection → content extraction
  *   → JSON parsing → Zod validation → domain result
  *
  * SECURITY: All document content is treated as DATA, never as instructions.
  * Trust boundary is enforced at the prompt level via explicit system instructions.
  * Prompt injection defense: document content is wrapped in structured delimiters.
  */
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import type { AIProvider, DocumentChunk } from './provider';
 import type {
   DocumentSummary,
@@ -37,12 +39,13 @@ import { logger } from '@/lib/utils/logger';
 import { randomUUID } from 'crypto';
 
 /**
- * Model is configured via GEMINI_MODEL env var (defaults to gemini-1.5-flash).
- * gemini-1.5-flash: fast, stable, good JSON mode support, cost-effective for legal doc analysis.
- * Do NOT use experimental models (gemini-2.0-flash-exp) — they produce empty responses on legal content.
+ * Model is configured via GEMINI_MODEL env var.
+ * Default: gemini-2.5-flash (stable, JSON mode, cost-effective for legal doc analysis).
+ * gemini-1.5-flash and gemini-2.0-flash are DEPRECATED and will fail.
  */
-const MODEL_NAME = process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
-const MAX_CONTEXT_CHARS = 60_000; // stay well within token limits
+const MODEL_NAME = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
+const MAX_CONTEXT_CHARS = 60_000;
+const REQUEST_TIMEOUT_MS = 30_000; // 30 second hard timeout per Gemini call
 
 /**
  * SECURITY: System instruction that establishes trust boundary.
@@ -74,12 +77,12 @@ const SAFETY_SETTINGS = [
 export class GeminiProvider implements AIProvider {
   readonly name = 'gemini';
   readonly isAvailable: boolean;
-  private genAI: GoogleGenerativeAI | null = null;
+  private ai: GoogleGenAI | null = null;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey && apiKey.length > 10) {
-      this.genAI = new GoogleGenerativeAI(apiKey);
+      this.ai = new GoogleGenAI({ apiKey });
       this.isAvailable = true;
       logger.info('Gemini provider initialised', { model: MODEL_NAME });
     } else {
@@ -87,35 +90,13 @@ export class GeminiProvider implements AIProvider {
     }
   }
 
-  private getModel() {
-    if (!this.genAI) {
-      throw new AppError(
-        'Gemini API key not configured. Set GEMINI_API_KEY environment variable.',
-        503,
-        'AI_UNAVAILABLE'
-      );
-    }
-    return this.genAI.getGenerativeModel({
-      model: MODEL_NAME,
-      systemInstruction: SYSTEM_TRUST_BOUNDARY,
-      safetySettings: SAFETY_SETTINGS,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.1, // low temperature for factual, consistent analysis
-        maxOutputTokens: 8192,
-      },
-    });
-  }
-
   /**
    * Wraps document content in security delimiters to enforce trust boundary.
-   * Prevents prompt injection from malicious document content.
    */
   private wrapDocumentData(content: string): string {
     const truncated = content.length > MAX_CONTEXT_CHARS
       ? content.slice(0, MAX_CONTEXT_CHARS) + '\n[... document truncated for analysis ...]'
       : content;
-
     return `<DOCUMENT_DATA>\n${truncated}\n</DOCUMENT_DATA>`;
   }
 
@@ -131,40 +112,176 @@ export class GeminiProvider implements AIProvider {
   }
 
   /**
-   * Core Gemini call with full error pipeline:
-   *   request → finishReason check → text extraction → JSON parse → Zod validate
+   * Core Gemini call with full error pipeline and hard timeout:
+   *   request (with AbortController) → finishReason check → text extraction → JSON parse → Zod validate
    *
-   * Maps Gemini-specific errors to typed AppError codes:
-   *   SAFETY / OTHER  → AI_BLOCKED_RESPONSE (not retried)
-   *   MAX_TOKENS      → AI_EMPTY_RESPONSE (retried with truncated input upstream)
-   *   RECITATION      → AI_BLOCKED_RESPONSE (not retried)
-   *   empty text      → AI_EMPTY_RESPONSE (retried)
-   *   bad JSON        → AI_INVALID_RESPONSE (not retried)
-   *   Zod failure     → AI_SCHEMA_INVALID (not retried)
-   *   rate limit 429  → AI_RATE_LIMITED (retried with backoff)
+   * Maps Gemini-specific errors to typed AppError codes.
    */
   private async callGemini<T>(
     prompt: string,
     schema: { parse: (data: unknown) => T },
     operationName: string
   ): Promise<T> {
-    const model = this.getModel();
+    if (!this.ai) {
+      throw new AppError(
+        'Gemini API key not configured. Set GEMINI_API_KEY environment variable.',
+        503,
+        'AI_UNAVAILABLE'
+      );
+    }
+
+    const ai = this.ai;
     const startMs = Date.now();
 
     return withRetry(async () => {
-      let result;
+      // Hard timeout via AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
       try {
-        result = await model.generateContent(prompt);
+        const response = await ai.models.generateContent({
+          model: MODEL_NAME,
+          contents: prompt,
+          config: {
+            systemInstruction: SYSTEM_TRUST_BOUNDARY,
+            safetySettings: SAFETY_SETTINGS,
+            responseMimeType: 'application/json',
+            temperature: 0.1,
+            maxOutputTokens: 8192,
+            abortSignal: controller.signal,
+          },
+        });
+
+        clearTimeout(timeoutId);
+
+        // Check finish reason
+        const candidate = response.candidates?.[0];
+        const finishReason = candidate?.finishReason;
+
+        if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+          logger.warn('Gemini non-STOP finish', {
+            operation: operationName,
+            finishReason,
+            durationMs: Date.now() - startMs,
+          });
+          throw new AppError(
+            `AI response for ${operationName} was not completed: ${finishReason}`,
+            502,
+            'AI_BLOCKED_RESPONSE'
+          );
+        }
+
+        // Also check prompt-level block
+        if (response.promptFeedback?.blockReason) {
+          throw new AppError(
+            `Request was blocked by AI safety filters: ${response.promptFeedback.blockReason}`,
+            400,
+            'AI_BLOCKED_RESPONSE'
+          );
+        }
+
+        const text = response.text ?? '';
+        if (!text || text.trim().length === 0) {
+          throw new AppError(
+            `Empty response from AI for ${operationName}`,
+            502,
+            'AI_EMPTY_RESPONSE'
+          );
+        }
+
+        // Strip markdown code fences if model wraps JSON in them
+        const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch {
+          logger.warn('Gemini returned malformed JSON', {
+            operation: operationName,
+            textLength: cleaned.length,
+            textPreview: cleaned.substring(0, 200),
+          });
+          throw new AppError(
+            `AI returned malformed JSON for ${operationName}`,
+            502,
+            'AI_INVALID_RESPONSE'
+          );
+        }
+
+        try {
+          const validated = schema.parse(parsed);
+          logger.info('AI operation completed', {
+            operation: operationName,
+            model: MODEL_NAME,
+            durationMs: Date.now() - startMs,
+          });
+          return validated;
+        } catch (err) {
+          logger.warn('Gemini schema validation failed', {
+            operation: operationName,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw new AppError(
+            `AI response did not match expected schema for ${operationName}: ${err instanceof Error ? err.message : String(err)}`,
+            502,
+            'AI_SCHEMA_INVALID'
+          );
+        }
       } catch (err) {
-        // Map HTTP-level errors before they bubble up
+        clearTimeout(timeoutId);
+
+        // Re-throw AppErrors as-is
+        if (err instanceof AppError) throw err;
+
         const message = err instanceof Error ? err.message : String(err);
+        const errName = err instanceof Error ? err.name : 'unknown';
+        const elapsed = Date.now() - startMs;
+
+        logger.error('Gemini API call failed', {
+          operation: operationName,
+          model: MODEL_NAME,
+          errorName: errName,
+          errorMessage: message.substring(0, 300),
+          durationMs: elapsed,
+        });
+
+        // Timeout (AbortController)
+        if (errName === 'AbortError' || message.includes('abort')) {
+          throw new AppError(
+            `AI request timed out after ${Math.round(elapsed / 1000)}s for ${operationName}`,
+            504,
+            'AI_TIMEOUT'
+          );
+        }
+
+        // Rate limiting
         if (message.includes('429') || message.toLowerCase().includes('rate limit') || message.toLowerCase().includes('quota')) {
           throw new AppError(
-            'AI service rate limit reached. Please wait a moment before trying again.',
+            'AI service rate limit reached. Please wait a moment.',
             429,
             'AI_RATE_LIMITED'
           );
         }
+
+        // Invalid model
+        if (message.includes('not found') || message.includes('not supported') || message.includes('404')) {
+          throw new AppError(
+            `AI model "${MODEL_NAME}" is not available. Check GEMINI_MODEL configuration.`,
+            400,
+            'AI_UNAVAILABLE'
+          );
+        }
+
+        // Auth errors
+        if (message.includes('401') || message.includes('403') || message.includes('PERMISSION_DENIED') || message.includes('API key')) {
+          throw new AppError(
+            'AI authentication failed. Check your GEMINI_API_KEY.',
+            401,
+            'AI_UNAVAILABLE'
+          );
+        }
+
+        // Network errors
         if (message.includes('fetch') || message.includes('network') || message.includes('ECONNRESET')) {
           throw new AppError(
             `Network error communicating with AI service: ${message}`,
@@ -172,69 +289,11 @@ export class GeminiProvider implements AIProvider {
             'AI_PROVIDER_ERROR'
           );
         }
-        throw new AppError(`Gemini API error for ${operationName}: ${message}`, 502, 'AI_PROVIDER_ERROR');
-      }
 
-      const response = result.response;
-
-      // Check finish reason before calling .text() — non-STOP reasons produce empty/null text
-      const candidate = response.candidates?.[0];
-      const finishReason = candidate?.finishReason;
-
-      if (finishReason && finishReason !== 'STOP') {
-        // RECITATION: model refusing due to copyright, MAX_TOKENS: truncated, SAFETY: blocked
-        const blockReason = response.promptFeedback?.blockReason ?? finishReason;
         throw new AppError(
-          `AI response for ${operationName} was not completed: ${blockReason}`,
+          `Gemini API error for ${operationName}: ${message.substring(0, 200)}`,
           502,
-          finishReason === 'MAX_TOKENS' ? 'AI_EMPTY_RESPONSE' : 'AI_BLOCKED_RESPONSE'
-        );
-      }
-
-      // Also check if prompt itself was blocked (no candidates at all)
-      if (response.promptFeedback?.blockReason) {
-        throw new AppError(
-          `Request was blocked by AI safety filters: ${response.promptFeedback.blockReason}`,
-          400,
-          'AI_BLOCKED_RESPONSE'
-        );
-      }
-
-      const text = response.text();
-      if (!text || text.trim().length === 0) {
-        throw new AppError(
-          `Empty response from AI for ${operationName}`,
-          502,
-          'AI_EMPTY_RESPONSE'
-        );
-      }
-
-      // Strip markdown code fences if the model wraps JSON in them
-      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(cleaned);
-      } catch {
-        throw new AppError(
-          `AI returned malformed JSON for ${operationName}`,
-          502,
-          'AI_INVALID_RESPONSE'
-        );
-      }
-
-      try {
-        const validated = schema.parse(parsed);
-        logger.info('AI operation completed', {
-          operation: operationName,
-          durationMs: Date.now() - startMs,
-        });
-        return validated;
-      } catch (err) {
-        throw new AppError(
-          `AI response did not match expected schema for ${operationName}: ${err instanceof Error ? err.message : String(err)}`,
-          502,
-          'AI_SCHEMA_INVALID'
+          'AI_PROVIDER_ERROR'
         );
       }
     }, { maxRetries: 2, baseDelayMs: 1000 });
@@ -374,8 +433,6 @@ Only extract obligations that are explicitly stated in the document.`;
     documentTitle: string
   ): Promise<QuestionAnswer> {
     const docContent = this.chunksToText(relevantChunks, 30_000);
-
-    // SECURITY: sanitize question before including in prompt
     const sanitizedQuestion = question.replace(/<[^>]*>/g, '').slice(0, 500);
 
     const prompt = `Answer the following question about a legal document.

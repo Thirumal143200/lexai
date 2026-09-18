@@ -28,7 +28,7 @@ export function getAIProvider(): AIProvider {
   const gemini = new GeminiProvider();
   if (gemini.isAvailable) {
     _provider = gemini;
-    logger.info('AI provider: Gemini (live mode)', { model: process.env.GEMINI_MODEL ?? 'gemini-1.5-flash' });
+    logger.info('AI provider: Gemini (live mode)', { model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash' });
   } else {
     // Graceful degradation: fall back to mock with a warning
     logger.warn('AI provider: Mock (demo mode) — GEMINI_API_KEY not set');

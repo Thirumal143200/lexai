@@ -6,6 +6,10 @@
  *
  * Processing is triggered by the upload API route and runs in-process.
  * For higher scale, this would move to a background job queue.
+ *
+ * DESIGN: AI analysis runs ONLY during background processing (not on-demand
+ * from API routes) to avoid duplicate Gemini calls. The summary/clauses/risks/
+ * obligations routes read cached results from the DB.
  */
 
 import fs from 'fs';
@@ -47,6 +51,10 @@ export async function deleteStoredFile(filename: string): Promise<void> {
 /**
  * Full processing pipeline for an uploaded document.
  * Runs after the file is saved and the DB record is created.
+ *
+ * AI analysis is fire-and-forget: if Gemini fails for a specific analysis type,
+ * the document still moves to 'ready' so the frontend can display whatever succeeded
+ * and retry the rest on demand.
  */
 export async function processDocument(
   db: Database.Database,
@@ -77,36 +85,53 @@ export async function processDocument(
       method: extracted.extractionMethod,
     });
 
-    // Stage 3: AI analysis — generate all analyses upfront
-    const [summary, clauses, _risksPlaceholder, obligations] = await Promise.allSettled([
+    // Stage 3: AI analysis — run summary, clauses, obligations in parallel
+    // Each analysis is independently wrapped so failures don't block others
+    const [summaryResult, clausesResult, obligationsResult] = await Promise.allSettled([
       provider.summarizeDocument(chunks, extracted.text),
       provider.extractClauses(chunks),
-      null, // risks need summary first
       provider.extractObligations(chunks),
     ]);
 
-    if (summary.status === 'fulfilled') {
-      upsertAnalysis(db, documentId, 'summary', summary.value, provider.name);
+    // Store successful results
+    if (summaryResult.status === 'fulfilled') {
+      upsertAnalysis(db, documentId, 'summary', summaryResult.value, provider.name);
+      logger.info('Summary analysis stored', { documentId });
 
-      // Risks analysis uses summary context
+      // Risks analysis depends on summary — run sequentially after
       try {
-        const riskResult = await provider.analyzeRisks(chunks, summary.value);
+        const riskResult = await provider.analyzeRisks(chunks, summaryResult.value);
         upsertAnalysis(db, documentId, 'risks', riskResult, provider.name);
+        logger.info('Risk analysis stored', { documentId });
       } catch (err) {
-        logger.warn('Risk analysis failed', { documentId, error: err instanceof Error ? err.message : String(err) });
+        const msg = err instanceof AppError ? `${err.code}: ${err.message}` : (err instanceof Error ? err.message : String(err));
+        logger.warn('Risk analysis failed', { documentId, error: msg });
       }
     } else {
-      logger.warn('Summary generation failed', { documentId });
+      const reason = summaryResult.reason;
+      const msg = reason instanceof AppError
+        ? `${reason.code}: ${reason.message}`
+        : (reason instanceof Error ? reason.message : String(reason));
+      logger.error('Summary generation failed', { documentId, error: msg, provider: provider.name });
     }
 
-    if (clauses.status === 'fulfilled') {
-      upsertAnalysis(db, documentId, 'clauses', clauses.value, provider.name);
+    if (clausesResult.status === 'fulfilled') {
+      upsertAnalysis(db, documentId, 'clauses', clausesResult.value, provider.name);
+    } else {
+      const reason = clausesResult.reason;
+      const msg = reason instanceof Error ? reason.message : String(reason);
+      logger.warn('Clause extraction failed', { documentId, error: msg });
     }
 
-    if (obligations.status === 'fulfilled' && obligations.value) {
-      upsertAnalysis(db, documentId, 'obligations', obligations.value, provider.name);
+    if (obligationsResult.status === 'fulfilled' && obligationsResult.value) {
+      upsertAnalysis(db, documentId, 'obligations', obligationsResult.value, provider.name);
+    } else if (obligationsResult.status === 'rejected') {
+      const reason = obligationsResult.reason;
+      const msg = reason instanceof Error ? reason.message : String(reason);
+      logger.warn('Obligation extraction failed', { documentId, error: msg });
     }
 
+    // Mark as ready even if some analyses failed — the frontend can retry individual analyses
     updateDocumentStatus(db, documentId, 'ready');
     logger.info('Document processing complete', { documentId });
 

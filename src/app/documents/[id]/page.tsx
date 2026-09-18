@@ -44,19 +44,23 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [loadingDoc, setLoadingDoc] = useState(true);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('summary');
 
-  // Analyses data states
+  // Analyses data states — each has loading + error + data
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   const [clausesData, setClausesData] = useState<ClauseExtractionResult | null>(null);
   const [loadingClauses, setLoadingClauses] = useState(false);
+  const [clausesError, setClausesError] = useState<string | null>(null);
   const [clauseFilter, setClauseFilter] = useState<string>('all');
 
   const [risksData, setRisksData] = useState<RiskAnalysisResult | null>(null);
   const [loadingRisks, setLoadingRisks] = useState(false);
+  const [risksError, setRisksError] = useState<string | null>(null);
 
   const [obligationsData, setObligationsData] = useState<ObligationExtractionResult['obligations'] | null>(null);
   const [loadingObligations, setLoadingObligations] = useState(false);
+  const [obligationsError, setObligationsError] = useState<string | null>(null);
 
   // Q&A states
   const [questionInput, setQuestionInput] = useState('');
@@ -68,6 +72,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [checklistType, setChecklistType] = useState<Checklist['type']>('before-signing');
   const [checklist, setChecklist] = useState<Checklist | null>(null);
   const [loadingChecklist, setLoadingChecklist] = useState(false);
+  const [checklistError, setChecklistError] = useState<string | null>(null);
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
 
   // 1. Fetch Document Info
@@ -85,69 +90,89 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     }
   }, [documentId]);
 
-  // 2. Fetch Summary
-  const fetchSummary = useCallback(async () => {
-    if (summary || loadingSummary) return;
+  // 2. Fetch Summary (with error handling and retry support)
+  const fetchSummary = useCallback(async (forceRetry = false) => {
+    if ((summary && !forceRetry) || loadingSummary) return;
     setLoadingSummary(true);
+    setSummaryError(null);
     try {
       const res = await fetch(`/api/documents/${documentId}/summary`);
       if (res.ok) {
-        const data = await res.json() as { summary: DocumentSummary };
-        setSummary(data.summary);
+        const data = await res.json() as { summary?: DocumentSummary; status?: string };
+        if (data.summary) {
+          setSummary(data.summary);
+        } else if (data.status === 'processing') {
+          setSummaryError('Document is still being analysed. Please wait a moment and try again.');
+        }
+      } else {
+        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        setSummaryError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
     } catch {
-      // ignore
+      setSummaryError('Failed to connect to the server. Please try again.');
     } finally {
       setLoadingSummary(false);
     }
   }, [documentId, summary, loadingSummary]);
 
   // 3. Fetch Clauses
-  const fetchClauses = useCallback(async () => {
-    if (clausesData || loadingClauses) return;
+  const fetchClauses = useCallback(async (forceRetry = false) => {
+    if ((clausesData && !forceRetry) || loadingClauses) return;
     setLoadingClauses(true);
+    setClausesError(null);
     try {
       const res = await fetch(`/api/documents/${documentId}/clauses`);
       if (res.ok) {
         const data = await res.json() as ClauseExtractionResult;
         setClausesData(data);
+      } else {
+        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        setClausesError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
     } catch {
-      // ignore
+      setClausesError('Failed to connect to the server. Please try again.');
     } finally {
       setLoadingClauses(false);
     }
   }, [documentId, clausesData, loadingClauses]);
 
   // 4. Fetch Risks
-  const fetchRisks = useCallback(async () => {
-    if (risksData || loadingRisks) return;
+  const fetchRisks = useCallback(async (forceRetry = false) => {
+    if ((risksData && !forceRetry) || loadingRisks) return;
     setLoadingRisks(true);
+    setRisksError(null);
     try {
       const res = await fetch(`/api/documents/${documentId}/risks`);
       if (res.ok) {
         const data = await res.json() as { risks: RiskAnalysisResult };
         setRisksData(data.risks);
+      } else {
+        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        setRisksError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
     } catch {
-      // ignore
+      setRisksError('Failed to connect to the server. Please try again.');
     } finally {
       setLoadingRisks(false);
     }
   }, [documentId, risksData, loadingRisks]);
 
   // 5. Fetch Obligations
-  const fetchObligations = useCallback(async () => {
-    if (obligationsData || loadingObligations) return;
+  const fetchObligations = useCallback(async (forceRetry = false) => {
+    if ((obligationsData && !forceRetry) || loadingObligations) return;
     setLoadingObligations(true);
+    setObligationsError(null);
     try {
       const res = await fetch(`/api/documents/${documentId}/obligations`);
       if (res.ok) {
         const data = await res.json() as { obligations: ObligationExtractionResult['obligations'] };
         setObligationsData(data.obligations);
+      } else {
+        const data = await res.json().catch(() => ({ error: 'Analysis failed' })) as { error?: string };
+        setObligationsError(data.error || `Analysis failed (HTTP ${res.status})`);
       }
     } catch {
-      // ignore
+      setObligationsError('Failed to connect to the server. Please try again.');
     } finally {
       setLoadingObligations(false);
     }
@@ -169,6 +194,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   // 7. Fetch Checklist
   const fetchChecklist = useCallback(async (type: Checklist['type']) => {
     setLoadingChecklist(true);
+    setChecklistError(null);
     try {
       const res = await fetch(`/api/documents/${documentId}/checklist`, {
         method: 'POST',
@@ -178,9 +204,12 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
       if (res.ok) {
         const data = await res.json() as { checklist: Checklist };
         setChecklist(data.checklist);
+      } else {
+        const data = await res.json().catch(() => ({ error: 'Failed to generate checklist' })) as { error?: string };
+        setChecklistError(data.error || `Checklist generation failed (HTTP ${res.status})`);
       }
     } catch {
-      // ignore
+      setChecklistError('Failed to connect to the server. Please try again.');
     } finally {
       setLoadingChecklist(false);
     }
@@ -375,15 +404,31 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 1: SUMMARY & OVERVIEW ── */}
         {activeTab === 'summary' && (
-          <div>
+          <div aria-live="polite">
             {loadingSummary ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
+                <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
                 Loading summary…
+              </div>
+            ) : summaryError ? (
+              <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
+                <span>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <strong>Summary Generation Failed</strong>
+                  <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{summaryError}</p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 'var(--space-2)' }}
+                    onClick={() => fetchSummary(true)}
+                  >
+                    Retry Summary
+                  </button>
+                </div>
               </div>
             ) : !summary ? (
               <div className="card" style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
                 <p style={{ color: 'var(--color-text-2)' }}>No summary generated yet.</p>
-                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={fetchSummary}>
+                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={() => fetchSummary(true)}>
                   Generate Summary Now
                 </button>
               </div>
@@ -462,15 +507,31 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 2: CLAUSE BREAKDOWN ── */}
         {activeTab === 'clauses' && (
-          <div>
+          <div aria-live="polite">
             {loadingClauses ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
+                <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
                 Extracting and analysing clauses…
+              </div>
+            ) : clausesError ? (
+              <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
+                <span>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <strong>Clause Analysis Failed</strong>
+                  <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{clausesError}</p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 'var(--space-2)' }}
+                    onClick={() => fetchClauses(true)}
+                  >
+                    Retry Clause Extraction
+                  </button>
+                </div>
               </div>
             ) : !clausesData || clausesData.clauses.length === 0 ? (
               <div className="card" style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
                 <p style={{ color: 'var(--color-text-2)' }}>No clauses extracted yet.</p>
-                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={fetchClauses}>
+                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={() => fetchClauses(true)}>
                   Extract Clauses Now
                 </button>
               </div>
@@ -552,15 +613,31 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 3: RISK & RED FLAGS ── */}
         {activeTab === 'risks' && (
-          <div>
+          <div aria-live="polite">
             {loadingRisks ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
+                <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
                 Auditing risks and contractual pitfalls…
+              </div>
+            ) : risksError ? (
+              <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
+                <span>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <strong>Risk Analysis Failed</strong>
+                  <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{risksError}</p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 'var(--space-2)' }}
+                    onClick={() => fetchRisks(true)}
+                  >
+                    Retry Risk Analysis
+                  </button>
+                </div>
               </div>
             ) : !risksData ? (
               <div className="card" style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
                 <p style={{ color: 'var(--color-text-2)' }}>No risk audit available yet.</p>
-                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={fetchRisks}>
+                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={() => fetchRisks(true)}>
                   Run Risk Audit Now
                 </button>
               </div>
@@ -629,15 +706,31 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 4: OBLIGATIONS & TIMELINE ── */}
         {activeTab === 'obligations' && (
-          <div>
+          <div aria-live="polite">
             {loadingObligations ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
+                <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
                 Extracting contractual obligations…
+              </div>
+            ) : obligationsError ? (
+              <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
+                <span>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <strong>Obligation Extraction Failed</strong>
+                  <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{obligationsError}</p>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 'var(--space-2)' }}
+                    onClick={() => fetchObligations(true)}
+                  >
+                    Retry Obligation Extraction
+                  </button>
+                </div>
               </div>
             ) : !obligationsData || obligationsData.length === 0 ? (
               <div className="card" style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
                 <p style={{ color: 'var(--color-text-2)' }}>No obligations mapped yet.</p>
-                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={fetchObligations}>
+                <button className="btn btn-secondary btn-sm" style={{ marginTop: 'var(--space-3)' }} onClick={() => fetchObligations(true)}>
                   Extract Obligations Now
                 </button>
               </div>
@@ -678,7 +771,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 5: ASK THE DOCUMENT (RAG Q&A) ── */}
         {activeTab === 'qa' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }} aria-live="polite">
             <div className="card">
               <div className="card-header">
                 <h3 className="card-title">Ask the Document (Grounded Q&amp;A)</h3>
@@ -710,7 +803,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
                 </form>
 
                 {qaError && (
-                  <div className="notice notice-error" style={{ marginTop: 'var(--space-3)' }}>
+                  <div className="notice notice-error" role="alert" style={{ marginTop: 'var(--space-3)' }}>
                     <span>⚠</span>
                     <p>{qaError}</p>
                   </div>
@@ -805,7 +898,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
 
         {/* ── TAB 6: CHECKLISTS & ACTION PLAN ── */}
         {activeTab === 'checklists' && (
-          <div>
+          <div aria-live="polite">
             <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
               <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
                 <div>
@@ -835,7 +928,23 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
               <div className="card-body">
                 {loadingChecklist ? (
                   <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-3)' }}>
+                    <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
                     Generating checklist items…
+                  </div>
+                ) : checklistError ? (
+                  <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
+                    <span>⚠</span>
+                    <div style={{ flex: 1 }}>
+                      <strong>Checklist Generation Failed</strong>
+                      <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{checklistError}</p>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ marginTop: 'var(--space-2)' }}
+                        onClick={() => fetchChecklist(checklistType)}
+                      >
+                        Retry Checklist Generation
+                      </button>
+                    </div>
                   </div>
                 ) : !checklist || checklist.items.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 'var(--space-6)' }}>
