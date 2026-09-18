@@ -45,9 +45,11 @@ import { randomUUID } from 'crypto';
 const PRIMARY_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
 const CANDIDATE_MODELS = [
   PRIMARY_MODEL,
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
   'gemini-2.0-flash',
   'gemini-1.5-flash',
-].filter((m, idx, arr) => arr.indexOf(m) === idx);
+].filter((m, idx, arr) => Boolean(m) && arr.indexOf(m) === idx);
 const MAX_CONTEXT_CHARS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000; // 30 second hard timeout per Gemini call
 
@@ -293,7 +295,7 @@ export class GeminiProvider implements AIProvider {
             // Invalid model
             if (message.includes('not found') || message.includes('not supported') || message.includes('404')) {
               throw new AppError(
-                `AI model "${currentModel}" is not available. Check GEMINI_MODEL configuration.`,
+                `AI model "${currentModel}" is not available: ${message}`,
                 400,
                 'AI_UNAVAILABLE'
               );
