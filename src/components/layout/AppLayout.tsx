@@ -88,6 +88,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
+      {/* Mobile nav bar */}
+      <nav className="mobile-nav" aria-label="Mobile navigation">
+        <Link href="/" className={pathname === '/' ? 'active' : ''}>
+          <span aria-hidden>⌂</span> Dashboard
+        </Link>
+        <Link href="/documents" className={pathname === '/documents' ? 'active' : ''}>
+          <span aria-hidden>◻</span> Documents
+        </Link>
+        <Link href="/compare" className={pathname === '/compare' ? 'active' : ''}>
+          <span aria-hidden>⇄</span> Compare
+        </Link>
+        <Link href="/privacy" className={pathname === '/privacy' ? 'active' : ''}>
+          <span aria-hidden>🔒</span> Privacy
+        </Link>
+        <Link href="/terms" className={pathname === '/terms' ? 'active' : ''}>
+          <span aria-hidden>📜</span> Terms
+        </Link>
+      </nav>
+
       {/* Sidebar */}
       <nav className="sidebar" aria-label="Main navigation">
         <p className="sidebar-section-label">Workspace</p>
@@ -104,6 +123,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             </li>
           ))}
+        </ul>
+
+        {/* Legal navigation */}
+        <p className="sidebar-section-label" style={{ marginTop: 'var(--space-4)' }}>Legal &amp; Info</p>
+        <ul className="sidebar-nav" role="list">
+          <li className="sidebar-nav-item">
+            <Link
+              href="/privacy"
+              className={pathname === '/privacy' ? 'active' : ''}
+              aria-current={pathname === '/privacy' ? 'page' : undefined}
+            >
+              <span className="sidebar-nav-icon" aria-hidden>🔒</span>
+              Privacy Policy
+            </Link>
+          </li>
+          <li className="sidebar-nav-item">
+            <Link
+              href="/terms"
+              className={pathname === '/terms' ? 'active' : ''}
+              aria-current={pathname === '/terms' ? 'page' : undefined}
+            >
+              <span className="sidebar-nav-icon" aria-hidden>📜</span>
+              Terms of Use
+            </Link>
+          </li>
         </ul>
 
         {/* AI mode indicator in sidebar footer */}
@@ -127,7 +171,46 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* Main */}
       <main className="main-content" id="main-content">
-        {children}
+        <div style={{ minHeight: 'calc(100vh - 120px)' }}>
+          {children}
+        </div>
+        
+        {/* Footer */}
+        <footer
+          style={{
+            marginTop: 'var(--space-8)',
+            paddingTop: 'var(--space-4)',
+            borderTop: '1px solid var(--color-border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 'var(--space-3)',
+            fontSize: '0.8125rem',
+            color: 'var(--color-text-3)',
+          }}
+          role="contentinfo"
+        >
+          <div>
+            LexAI · General informational use only — not professional legal advice.
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-4)' }}>
+            <Link href="/privacy" style={{ color: 'var(--color-text-3)', textDecoration: 'none' }}>
+              Privacy
+            </Link>
+            <Link href="/terms" style={{ color: 'var(--color-text-3)', textDecoration: 'none' }}>
+              Terms
+            </Link>
+            <a
+              href="https://github.com/Thirumal143200/lexai"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--color-text-3)', textDecoration: 'none' }}
+            >
+              GitHub ↗
+            </a>
+          </div>
+        </footer>
       </main>
     </div>
   );
