@@ -43,15 +43,47 @@ export type DocumentSummary = z.infer<typeof DocumentSummarySchema>;
 
 // ─── Clause ──────────────────────────────────────────────────────────────────
 
-export const ClauseCategorySchema = z.enum([
-  'payment', 'termination', 'renewal', 'confidentiality', 'non-disclosure',
-  'non-compete', 'intellectual-property', 'liability', 'indemnity', 'warranty',
-  'dispute-resolution', 'arbitration', 'governing-law', 'data-protection',
-  'privacy', 'security', 'force-majeure', 'assignment', 'exclusivity',
-  'employment', 'service-obligations', 'deliverables', 'sla', 'penalties',
-  'refunds', 'compliance', 'other',
-]);
-export type ClauseCategory = z.infer<typeof ClauseCategorySchema>;
+import { normalizeClauseCategory } from './clause-classifier';
+
+export const VALID_CLAUSE_CATEGORIES = [
+  'termination',
+  'liability',
+  'indemnity',
+  'confidentiality',
+  'intellectual_property',
+  'intellectual-property',
+  'payment',
+  'dispute_resolution',
+  'dispute-resolution',
+  'warranty',
+  'renewal',
+  'governing_law',
+  'governing-law',
+  'arbitration',
+  'compliance',
+  'employment',
+  'data_protection',
+  'data-protection',
+  'privacy',
+  'security',
+  'force_majeure',
+  'force-majeure',
+  'non-disclosure',
+  'non_disclosure',
+  'assignment',
+  'exclusivity',
+  'service-obligations',
+  'deliverables',
+  'sla',
+  'penalties',
+  'refunds',
+  'other',
+] as const;
+
+export const ClauseCategorySchema = z
+  .enum(VALID_CLAUSE_CATEGORIES)
+  .transform((val) => normalizeClauseCategory(val));
+export type ClauseCategory = string;
 
 export const ClauseSchema = z.object({
   id: z.string(),

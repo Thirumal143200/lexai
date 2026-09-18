@@ -448,7 +448,7 @@ Return a JSON object with this EXACT structure:
   "clauses": [
     {
       "id": "clause-1",
-      "category": one of ["payment","termination","renewal","confidentiality","non-disclosure","non-compete","intellectual-property","liability","indemnity","warranty","dispute-resolution","arbitration","governing-law","data-protection","privacy","security","force-majeure","assignment","exclusivity","employment","service-obligations","deliverables","sla","penalties","refunds","compliance","other"],
+      "category": one of ["termination","liability","indemnity","confidentiality","intellectual_property","payment","dispute_resolution","warranty","other"],
       "title": "clause title",
       "originalText": "exact text from document",
       "plainLanguageExplanation": "plain English explanation",

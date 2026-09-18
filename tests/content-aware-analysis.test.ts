@@ -242,7 +242,7 @@ This Lease shall be governed by the laws of the State of New York.`;
 
     // Differences must mention real categories
     const diffsText = comparison.keyDifferences.join(' ');
-    expect(diffsText).toMatch(/PAYMENT|GOVERNING-LAW|COMPLIANCE|TERMINATION|EMPLOYMENT/);
+    expect(diffsText).toMatch(/PAYMENT|DISPUTE_RESOLUTION|GOVERNING-LAW|COMPLIANCE|TERMINATION|EMPLOYMENT/i);
   });
 
   it('compares two similar leases and accurately highlights modified economic terms', async () => {
@@ -258,8 +258,10 @@ This Lease shall be governed by the laws of the State of New York.`;
     expect(rentComparison?.docAText).toContain('$18,500');
     expect(rentComparison?.docBText).toContain('$32,000');
 
-    // Governing law should be marked modified (Texas vs New York)
-    const lawComparison = comparison.clauseComparisons.find((c) => c.category === 'governing-law');
+    // Governing law / dispute resolution should be marked modified (Texas vs New York)
+    const lawComparison = comparison.clauseComparisons.find(
+      (c) => c.category === 'governing-law' || c.category === 'dispute_resolution'
+    );
     expect(lawComparison).toBeDefined();
     expect(lawComparison?.changeType).toBe('modified');
     expect(lawComparison?.docAText).toContain('Texas');

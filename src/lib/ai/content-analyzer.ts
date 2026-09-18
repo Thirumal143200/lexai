@@ -23,6 +23,12 @@ import type {
   ClauseCategory,
   ChecklistItem,
 } from './schemas';
+import {
+  classifyClause,
+  normalizeClauseCategory,
+  CLAUSE_CATEGORY_DEFINITIONS,
+  CanonicalClauseCategory,
+} from './clause-classifier';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -233,137 +239,223 @@ export function analyzeSummary(chunks: DocumentChunk[], fullText: string): Docum
 
 // ─── Clause Extraction ───────────────────────────────────────────────────────
 
-interface ClauseRule {
-  category: ClauseCategory;
-  title: string;
-  keywords: RegExp;
-  riskLevel: 'low' | 'medium' | 'high';
-  explanation: (party: string, text: string) => string;
-}
+const CATEGORY_EXPLANATIONS: Record<string, (party: string) => string> = {
+  termination: () =>
+    'Governs how and when either party can end the contract, notice windows, termination for cause/convenience, and default remedies.',
+  liability: () =>
+    'Caps maximum financial damages that can be recovered and waives consequential, special, or indirect damages.',
+  indemnity: (party) =>
+    `Transfers third-party legal defense obligations and financial loss from claims to ${party}.`,
+  confidentiality: () =>
+    'Requires the receiving party to protect proprietary information and restricts unauthorized disclosure or competitive use.',
+  intellectual_property: () =>
+    'Clarifies ownership of preexisting technology, data, work product developed under the agreement, and license grants.',
+  payment: (party) =>
+    `Defines the financial schedule, invoicing dates, late penalties, and payment amounts binding ${party}.`,
+  dispute_resolution: () =>
+    'Specifies the binding dispute mechanism (arbitration or litigation), applicable governing law, and exclusive venue.',
+  warranty: () =>
+    'Establishes performance standards, express warranties, and disclaimers of implied warranties like merchantability.',
+  renewal: () =>
+    'Specifies contract duration, automatic renewal mechanics, and advance non-renewal notice requirements.',
+  compliance: () =>
+    'Allocates operational maintenance duties, inspection rights, and permitted property or service use.',
+  employment: () =>
+    'Specifies professional duties, compensation structures, reporting lines, and restrictive covenants.',
+  other: () =>
+    'Establishes contractual rights and administrative terms governing the parties.',
+};
 
-const CLAUSE_RULES: ClauseRule[] = [
-  {
-    category: 'payment',
-    title: 'Payment and Financial Obligations',
-    keywords: /\b(rent|fee|fees|payment|salary|compensation|deposit|invoice|installments|charges)\b/i,
-    riskLevel: 'low',
-    explanation: (party) => `Defines the financial schedule, amounts, and payment methods binding ${party}.`,
-  },
-  {
-    category: 'termination',
-    title: 'Termination and Cancellation',
-    keywords: /\b(terminate|termination|cancel|cancellation|cure breach|default and remedies)\b/i,
-    riskLevel: 'high',
-    explanation: () => `Governs how and when either party can end the contract, including notice windows and cure periods.`,
-  },
-  {
-    category: 'renewal',
-    title: 'Term and Renewal',
-    keywords: /\b(automatic renewal|renew|renewal|holding over|commencement date|lease term)\b/i,
-    riskLevel: 'medium',
-    explanation: () => `Specifies the contract duration and whether the agreement auto-renews without affirmative consent.`,
-  },
-  {
-    category: 'confidentiality',
-    title: 'Confidentiality and Non-Disclosure',
-    keywords: /\b(confidential|proprietary information|trade secret|non-disclosure)\b/i,
-    riskLevel: 'medium',
-    explanation: () => `Requires the receiving party to protect proprietary information and restricts unauthorized disclosure.`,
-  },
-  {
-    category: 'liability',
-    title: 'Limitation of Liability',
-    keywords: /\b(limitation of liability|consequential damages|liability cap|in no event shall)\b/i,
-    riskLevel: 'high',
-    explanation: () => `Caps maximum financial damages that can be recovered in the event of breach or negligence.`,
-  },
-  {
-    category: 'indemnity',
-    title: 'Indemnification and Defense',
-    keywords: /\b(indemnif|hold harmless|defend, indemnify)\b/i,
-    riskLevel: 'high',
-    explanation: () => `Transfers legal defense obligations and financial loss from third-party claims to the indemnifying party.`,
-  },
-  {
-    category: 'intellectual-property',
-    title: 'Intellectual Property & Licensing',
-    keywords: /\b(intellectual property|patent|copyright|trademark|license grant|proprietary rights)\b/i,
-    riskLevel: 'medium',
-    explanation: () => `Clarifies ownership of preexisting technology, data, and work product developed under the agreement.`,
-  },
-  {
-    category: 'governing-law',
-    title: 'Governing Law and Jurisdiction',
-    keywords: /\b(governing law|jurisdiction|venue|courts of|laws of the state)\b/i,
-    riskLevel: 'low',
-    explanation: () => `Specifies which state/national legal system governs the contract and where disputes must be heard.`,
-  },
-  {
-    category: 'compliance',
-    title: 'Repairs, Use, and Maintenance',
-    keywords: /\b(repairs|maintenance|premises|alterations|fixtures|good order|inspection)\b/i,
-    riskLevel: 'medium',
-    explanation: () => `Allocates operational maintenance duties, inspection rights, and permitted property use.`,
-  },
-  {
-    category: 'employment',
-    title: 'Duties, Role, and Performance',
-    keywords: /\b(duties|job title|probation|working hours|full-time|employee covenants)\b/i,
-    riskLevel: 'low',
-    explanation: () => `Specifies professional duties, reporting lines, and employment conditions.`,
-  },
-];
+const DEFAULT_CATEGORY_RISK: Record<string, 'low' | 'medium' | 'high'> = {
+  termination: 'high',
+  liability: 'high',
+  indemnity: 'high',
+  confidentiality: 'medium',
+  intellectual_property: 'medium',
+  payment: 'low',
+  dispute_resolution: 'low',
+  warranty: 'medium',
+  renewal: 'medium',
+  compliance: 'medium',
+  employment: 'low',
+  other: 'low',
+};
 
 export function extractClausesFromContent(chunks: DocumentChunk[]): ClauseExtractionResult {
   const clauses: Clause[] = [];
-  const seenCategories = new Set<string>();
+  const seenClauseKeys = new Set<string>();
+  const sectionCatCounts = new Map<string, number>();
 
   for (const chunk of chunks) {
     const chunkText = chunk.text;
-    const sentences = getSentences(chunkText);
+    const sectionTitle = chunk.sectionTitle || `Section ${chunk.chunkIndex + 1}`;
 
-    for (const rule of CLAUSE_RULES) {
-      if (rule.keywords.test(chunkText)) {
-        // Prioritize sentences with monetary amounts, action obligations, or explicit terms
+    // Split chunk into paragraphs / distinct clauses
+    const paragraphs = chunkText
+      .split(/\n\s*\n|\n(?=\d+\.[\d.]*\s+[A-Z])/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 25);
+
+    const blocksToInspect = paragraphs.length > 0 ? paragraphs : [chunkText];
+
+    for (const block of blocksToInspect) {
+      // Check for paragraph-level heading, e.g. "5.1 Proprietary Rights." or "3.2 Late Charges."
+      const headingMatch = block.match(/^(\d+\.[\d.]*\s+[^.\n:]+[:.])/);
+      const blockHeading = headingMatch ? headingMatch[1].trim() : undefined;
+      const combinedHeading = blockHeading ? `${sectionTitle} - ${blockHeading}` : sectionTitle;
+
+      const classification = classifyClause(block, combinedHeading);
+
+      if (classification.score >= 5 && classification.category !== 'other') {
+        const category = classification.category;
+        const normCat = normalizeClauseCategory(category);
+
+        // Cap at 2 clauses of the exact same category per section to prevent starvation of later sections
+        const secCatKey = `${normCat}::${sectionTitle}`;
+        const count = sectionCatCounts.get(secCatKey) || 0;
+        if (count >= 2) continue;
+
+        // Deduplication key per category and section/block
+        const key = `${normCat}-${sectionTitle}-${blockHeading || block.slice(0, 40).toLowerCase()}`;
+        if (seenClauseKeys.has(key)) continue;
+        seenClauseKeys.add(key);
+        sectionCatCounts.set(secCatKey, count + 1);
+
+        const sentences = getSentences(block);
+
+        // Select the most representative sentence for this clause
         const matchingSentence =
-          sentences.find((s) => rule.keywords.test(s) && (/\$[\d,]+|\bbase salary\b|\bbase rent\b|\bannual fee\b|\bshall pay\b/i.test(s) && s.length > 20))
-          || sentences.find((s) => rule.keywords.test(s) && (/\bshall\b|\bmust\b|\bagrees to\b/i.test(s) && s.length > 25))
-          || sentences.find((s) => rule.keywords.test(s) && s.length > 30)
-          || sentences.find((s) => rule.keywords.test(s))
-          || sentences[0]
-          || chunkText.slice(0, 200);
+          sentences.find(
+            (s) =>
+              /\$[\d,]+|\bbase salary\b|\bbase rent\b|\bannual fee\b|\bmonthly\b|\bshall pay\b/i.test(s) &&
+              s.length > 25
+          ) ||
+          sentences.find((s) => classifyClause(s, sectionTitle).category === category && s.length > 30) ||
+          sentences.find((s) => /\b(?:shall|must|agrees to|warrants|indemnif|terminat|liab)\b/i.test(s) && s.length > 25) ||
+          sentences[0] ||
+          block.slice(0, 250);
 
-        const sectionTitle = chunk.sectionTitle || `Section ${chunk.chunkIndex + 1}`;
-        const key = `${rule.category}-${sectionTitle}`;
-
-        if (!seenCategories.has(key)) {
-          seenCategories.add(key);
-
-          // Extract obligations mentioned in sentence
-          const obligations: string[] = [];
-          if (/\b(?:shall|must|agrees to|will)\s+([^,.;]+)/i.test(matchingSentence)) {
-            const m = matchingSentence.match(/\b(?:shall|must|agrees to|will)\s+([^,.;]+)/i);
-            if (m && m[1]) obligations.push(m[1].trim());
+        // Extract obligations
+        const obligations: string[] = [];
+        const obMatches = block.matchAll(/\b(?:shall|must|agrees to|will)\s+([^,.;]+(?:within|to|by|against)?[^,.;]*)/gi);
+        for (const m of obMatches) {
+          if (m[1] && obligations.length < 3) {
+            obligations.push(m[1].trim());
           }
-
-          // Extract deadlines
-          const deadlineMatch = matchingSentence.match(/\b(?:within|by|on or before)\s+([^,.;]+(?:days|months|date|advance))/i);
-
-          clauses.push({
-            id: `clause-${clauses.length + 1}`,
-            category: rule.category,
-            title: chunk.sectionTitle ? `${chunk.sectionTitle}: ${rule.title}` : rule.title,
-            originalText: matchingSentence,
-            plainLanguageExplanation: rule.explanation('the bound party', matchingSentence),
-            obligations: obligations.length > 0 ? obligations : [`Comply with terms outlined in ${sectionTitle}`],
-            affectedParty: matchingSentence.includes('Tenant') ? 'Tenant' : matchingSentence.includes('Customer') ? 'Customer' : matchingSentence.includes('Employee') ? 'Employee' : 'All Parties',
-            trigger: matchingSentence.includes('upon') ? 'Occurrence of specified trigger event' : undefined,
-            deadline: deadlineMatch ? deadlineMatch[1].trim() : undefined,
-            riskLevel: rule.riskLevel,
-            sourceSection: sectionTitle,
-            pageNumber: chunk.pageNumber,
-          });
         }
+
+        // Extract deadlines
+        const deadlineMatch = block.match(
+          /\b(?:within|by|on or before|prior to)\s+([^,.;]+(?:days?|months?|hours?|date|advance|term))/i
+        );
+
+        // Determine affected party
+        const affectedParty = block.includes('Tenant')
+          ? 'Tenant'
+          : block.includes('Landlord')
+          ? 'Landlord'
+          : block.includes('Provider') || block.includes('Vendor')
+          ? 'Provider / Vendor'
+          : block.includes('Customer') || block.includes('Subscriber')
+          ? 'Customer / Subscriber'
+          : block.includes('Employee')
+          ? 'Employee'
+          : 'All Contracting Parties';
+
+        // Assess risk level
+        let riskLevel = DEFAULT_CATEGORY_RISK[normCat] || 'low';
+        if (
+          /\b(in no event shall|sole and exclusive|unilateral|accelerated|accrue interest|waives all rights|indemnif.*against all claims)\b/i.test(
+            block
+          )
+        ) {
+          riskLevel = 'high';
+        }
+
+        const categoryLabel =
+          CLAUSE_CATEGORY_DEFINITIONS[normCat as CanonicalClauseCategory]?.label ||
+          normCat.replace(/[-_]/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+
+        const displayTitle = blockHeading
+          ? `${sectionTitle} — ${blockHeading.replace(/[:.]/g, '').trim()}`
+          : `${sectionTitle}: ${categoryLabel}`;
+
+        const explanationFn = CATEGORY_EXPLANATIONS[normCat] || CATEGORY_EXPLANATIONS.other;
+
+        clauses.push({
+          id: `clause-${clauses.length + 1}`,
+          category: normCat,
+          title: displayTitle,
+          originalText: matchingSentence.trim(),
+          plainLanguageExplanation: explanationFn(affectedParty),
+          obligations: obligations.length > 0 ? obligations : [`Comply with terms specified in ${sectionTitle}`],
+          affectedParty,
+          trigger: block.includes('upon') ? 'Occurrence of designated triggering event' : undefined,
+          deadline: deadlineMatch ? deadlineMatch[1].trim() : undefined,
+          riskLevel,
+          sourceSection: sectionTitle,
+          pageNumber: chunk.pageNumber,
+        });
+      }
+    }
+
+    // Ensure section-level category is represented if not already added
+    const chunkClassification = classifyClause(chunkText, sectionTitle);
+    if (chunkClassification.score >= 10 && chunkClassification.category !== 'other') {
+      const normCat = normalizeClauseCategory(chunkClassification.category);
+      const sectionKey = `${normCat}-${sectionTitle}`;
+      if (!clauses.some((c) => normalizeClauseCategory(c.category) === normCat && c.sourceSection === sectionTitle)) {
+        seenClauseKeys.add(sectionKey);
+        const sentences = getSentences(chunkText);
+        const matchingSentence =
+          sentences.find((s) => classifyClause(s, sectionTitle).category === normCat && s.length > 25) ||
+          sentences[0] ||
+          chunkText.slice(0, 250);
+
+        const categoryLabel =
+          CLAUSE_CATEGORY_DEFINITIONS[normCat as CanonicalClauseCategory]?.label ||
+          normCat.replace(/[-_]/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+
+        const explanationFn = CATEGORY_EXPLANATIONS[normCat] || CATEGORY_EXPLANATIONS.other;
+
+        clauses.push({
+          id: `clause-${clauses.length + 1}`,
+          category: normCat,
+          title: `${sectionTitle}: ${categoryLabel}`,
+          originalText: matchingSentence.trim(),
+          plainLanguageExplanation: explanationFn('All Contracting Parties'),
+          obligations: [`Comply with terms specified in ${sectionTitle}`],
+          affectedParty: 'All Contracting Parties',
+          riskLevel: DEFAULT_CATEGORY_RISK[normCat] || 'low',
+          sourceSection: sectionTitle,
+          pageNumber: chunk.pageNumber,
+        });
+      }
+    }
+  }
+
+  // Fallback: If no clauses were extracted (unusual formatting), scan whole chunk text
+  if (clauses.length === 0) {
+    for (const chunk of chunks) {
+      const classification = classifyClause(chunk.text, chunk.sectionTitle);
+      if (classification.score >= 5) {
+        const normCat = normalizeClauseCategory(classification.category);
+        const sectionTitle = chunk.sectionTitle || `Section ${chunk.chunkIndex + 1}`;
+        const sentences = getSentences(chunk.text);
+        const sentence = sentences[0] || chunk.text.slice(0, 200);
+
+        clauses.push({
+          id: `clause-${clauses.length + 1}`,
+          category: normCat,
+          title: `${sectionTitle}: ${normCat.toUpperCase()}`,
+          originalText: sentence,
+          plainLanguageExplanation: `Provisions governing ${normCat.replace(/_/g, ' ')} under ${sectionTitle}.`,
+          obligations: [`Comply with obligations in ${sectionTitle}`],
+          affectedParty: 'All Parties',
+          riskLevel: DEFAULT_CATEGORY_RISK[normCat] || 'low',
+          sourceSection: sectionTitle,
+          pageNumber: chunk.pageNumber,
+        });
       }
     }
   }
@@ -382,7 +474,7 @@ export function extractClausesFromContent(chunks: DocumentChunk[]): ClauseExtrac
   }
 
   return {
-    clauses: clauses.slice(0, 15),
+    clauses: clauses.slice(0, 40),
     definedTerms,
   };
 }
@@ -737,7 +829,8 @@ export function compareDocumentsFromContent(
   let unchangedCount = 0;
 
   function getPrimaryClauseForCategory(clauses: Clause[], category: ClauseCategory): Clause | undefined {
-    const matching = clauses.filter((c) => c.category === category);
+    const normTarget = normalizeClauseCategory(category);
+    const matching = clauses.filter((c) => normalizeClauseCategory(c.category) === normTarget);
     if (matching.length === 0) return undefined;
     return matching.find((c) => /\$[\d,]+/.test(c.originalText))
       || matching.find((c) => /\bbase salary\b|\bbase rent\b|\bannual fee\b/i.test(c.originalText))

@@ -13,6 +13,12 @@ import type {
   Checklist,
   Citation,
 } from '@/lib/ai/schemas';
+import {
+  CLAUSE_FILTER_OPTIONS,
+  CLAUSE_CATEGORY_DEFINITIONS,
+  normalizeClauseCategory,
+  type CanonicalClauseCategory,
+} from '@/lib/ai/clause-classifier';
 
 interface DocumentMeta {
   id: string;
@@ -661,75 +667,145 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
               </div>
             ) : (
               <div>
-                {/* Filter tags */}
-                <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-4)' }}>
-                  {['all', 'termination', 'liability', 'indemnity', 'confidentiality', 'intellectual-property', 'payment', 'dispute-resolution', 'warranty'].map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setClauseFilter(cat)}
-                      className={`btn btn-sm ${clauseFilter === cat ? 'btn-secondary' : 'btn-ghost'}`}
-                      style={{ textTransform: 'capitalize' }}
-                    >
-                      {cat.replace('-', ' ')}
-                    </button>
-                  ))}
+                {/* Accessible Clause Category Filter Toolbar */}
+                <div
+                  role="group"
+                  aria-label="Filter clauses by category"
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 'var(--space-2)',
+                    marginBottom: 'var(--space-4)',
+                    alignItems: 'center',
+                  }}
+                >
+                  {CLAUSE_FILTER_OPTIONS.map((filter) => {
+                    const isSelected = clauseFilter === filter.id;
+                    const count =
+                      filter.id === 'all'
+                        ? clausesData.clauses.length
+                        : clausesData.clauses.filter((c) => normalizeClauseCategory(c.category) === filter.id).length;
+
+                    return (
+                      <button
+                        key={filter.id}
+                        type="button"
+                        aria-pressed={isSelected}
+                        onClick={() => setClauseFilter(filter.id)}
+                        className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          borderRadius: '9999px',
+                          padding: '6px 14px',
+                          fontSize: '0.8125rem',
+                          fontWeight: isSelected ? 600 : 500,
+                        }}
+                      >
+                        <span>{filter.label}</span>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            opacity: isSelected ? 1 : 0.7,
+                            background: isSelected ? 'rgba(255, 255, 255, 0.25)' : 'var(--color-surface-2)',
+                            borderRadius: '9999px',
+                            padding: '1px 6px',
+                          }}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Clauses list */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                  {clausesData.clauses
-                    .filter((c) => clauseFilter === 'all' || c.category === clauseFilter)
-                    .map((clause, idx) => (
-                      <div key={idx} className="card">
-                        <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <div>
-                            <span className="badge badge-neutral" style={{ marginRight: 'var(--space-2)', textTransform: 'capitalize' }}>
-                              {clause.category.replace('-', ' ')}
-                            </span>
-                            <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
-                              {clause.title || `Clause ${idx + 1}`}
-                            </span>
-                          </div>
-                          <span className={`badge ${
-                            clause.riskLevel === 'high'
-                              ? 'badge-high'
-                              : clause.riskLevel === 'medium'
-                              ? 'badge-med'
-                              : 'badge-low'
-                          }`}>
-                            {clause.riskLevel} risk
-                          </span>
-                        </div>
-                        <div className="card-body">
-                          {/* Plain-English explanation */}
-                          <div style={{ background: 'var(--color-accent-soft)', padding: 'var(--space-3)', borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-3)', border: '1px solid var(--color-accent-border)' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-accent)', textTransform: 'uppercase', marginBottom: '2px' }}>
-                              Plain English Meaning
-                            </div>
-                            <p style={{ fontSize: '0.875rem', color: 'var(--color-text)', lineHeight: 1.5 }}>
-                              {clause.plainLanguageExplanation}
-                            </p>
-                          </div>
+                {(() => {
+                  const filtered = clausesData.clauses.filter(
+                    (c) => clauseFilter === 'all' || normalizeClauseCategory(c.category) === clauseFilter
+                  );
 
-                          {/* Original Text Excerpt */}
-                          <div style={{ marginTop: 'var(--space-2)' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                              Original Contract Language ({clause.sourceSection || 'Excerpt'})
-                            </div>
-                            <blockquote style={{ fontFamily: 'var(--font-legal)', fontSize: '0.875rem', color: 'var(--color-text-2)', borderLeft: '3px solid var(--color-border-strong)', paddingLeft: 'var(--space-3)', fontStyle: 'italic', margin: 0, lineHeight: 1.6 }}>
-                              &ldquo;{clause.originalText}&rdquo;
-                            </blockquote>
-                          </div>
-
-                          {clause.affectedParty && (
-                            <div style={{ marginTop: 'var(--space-3)', paddingTop: 'var(--space-2)', borderTop: '1px solid var(--color-border)', fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>
-                              <strong>Affected Party:</strong> {clause.affectedParty}
-                            </div>
-                          )}
-                        </div>
+                  if (filtered.length === 0) {
+                    const filterMeta = CLAUSE_FILTER_OPTIONS.find((f) => f.id === clauseFilter);
+                    return (
+                      <div className="card" style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
+                        <p style={{ color: 'var(--color-text-2)', marginBottom: 'var(--space-3)' }}>
+                          No <strong>{filterMeta?.label || clauseFilter}</strong> clauses were detected in this document.
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setClauseFilter('all')}
+                        >
+                          Show All Clauses ({clausesData.clauses.length})
+                        </button>
                       </div>
-                    ))}
-                </div>
+                    );
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                      {filtered.map((clause, idx) => {
+                        const normCat = normalizeClauseCategory(clause.category);
+                        const categoryLabel =
+                          CLAUSE_CATEGORY_DEFINITIONS[normCat as CanonicalClauseCategory]?.label ||
+                          normCat.replace(/[-_]/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+
+                        return (
+                          <div key={clause.id || idx} className="card">
+                            <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <div>
+                                <span className="badge badge-neutral" style={{ marginRight: 'var(--space-2)' }}>
+                                  {categoryLabel}
+                                </span>
+                                <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
+                                  {clause.title || `Clause ${idx + 1}`}
+                                </span>
+                              </div>
+                              <span className={`badge ${
+                                clause.riskLevel === 'high'
+                                  ? 'badge-high'
+                                  : clause.riskLevel === 'medium'
+                                  ? 'badge-med'
+                                  : 'badge-low'
+                              }`}>
+                                {clause.riskLevel} risk
+                              </span>
+                            </div>
+                            <div className="card-body">
+                              {/* Plain-English explanation */}
+                              <div style={{ background: 'var(--color-accent-soft)', padding: 'var(--space-3)', borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-3)', border: '1px solid var(--color-accent-border)' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-accent)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                                  Plain English Meaning
+                                </div>
+                                <p style={{ fontSize: '0.875rem', color: 'var(--color-text)', lineHeight: 1.5 }}>
+                                  {clause.plainLanguageExplanation}
+                                </p>
+                              </div>
+
+                              {/* Original Text Excerpt */}
+                              <div style={{ marginTop: 'var(--space-2)' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                                  Original Contract Language ({clause.sourceSection || 'Excerpt'})
+                                </div>
+                                <blockquote style={{ fontFamily: 'var(--font-legal)', fontSize: '0.875rem', color: 'var(--color-text-2)', borderLeft: '3px solid var(--color-border-strong)', paddingLeft: 'var(--space-3)', fontStyle: 'italic', margin: 0, lineHeight: 1.6 }}>
+                                  &ldquo;{clause.originalText}&rdquo;
+                                </blockquote>
+                              </div>
+
+                              {clause.affectedParty && (
+                                <div style={{ marginTop: 'var(--space-3)', paddingTop: 'var(--space-2)', borderTop: '1px solid var(--color-border)', fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>
+                                  <strong>Affected Party:</strong> {clause.affectedParty}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
