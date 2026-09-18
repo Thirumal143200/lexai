@@ -67,7 +67,7 @@ See [ARCHITECTURE.md](file:///C:/lexai/ARCHITECTURE.md) for deep-dive technical 
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+ (tested on Node 20 & 24)
+- Node.js 22.x (LTS recommended, see `.node-version`)
 - npm 9+
 
 ### Installation
@@ -100,7 +100,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ```bash
 npm test
 ```
-Runs the complete test suite: **100 unit, integration, resilience, and security tests across 14 test suites**.
+Runs the complete test suite: **130 unit, integration, resilience, and security tests across 15 test suites**.
 
 ### Building for Production
 ```bash
@@ -141,7 +141,7 @@ LexAI uses **local SQLite + local filesystem** for document storage. This means:
 
 | Platform | SQLite | File Uploads | Notes |
 |---|---|---|---|
-| **Render** | ✅ Persistent | ✅ Persistent | **Recommended** (Next.js Standalone + Persistent Disk) |
+| **Render** | ⚠️ Ephemeral by default | ⚠️ Ephemeral by default | Ephemeral container filesystem on standard/free tiers; requires Render Persistent Disk add-on for durability across redeploys |
 | **Railway** | ✅ Persistent | ✅ Persistent | Supported with volume mounts |
 | **Fly.io** | ✅ Persistent | ✅ Persistent | Use volume mount |
 | **Vercel** | ⚠️ Ephemeral | ⚠️ Ephemeral | Data lost on redeploy — not suitable without external DB |
@@ -195,7 +195,7 @@ Demo mode is intentional and complete — evaluators can test the full workflow 
 1. **No user authentication**: LexAI is a single-tenant application. Adding multi-tenant auth (NextAuth + tenant-scoped DB queries) is documented in `ARCHITECTURE.md` but not implemented.
 2. **SQLite concurrency**: Suitable for single-server deployment. Under high concurrent write load, WAL mode provides read concurrency but writes serialize. For multi-server deployment, migrate to PostgreSQL.
 3. **Scanned PDF support**: Documents require machine-readable text. Scanned/image PDFs must be pre-processed with OCR (Tesseract) before upload.
-4. **Ephemeral storage on serverless**: Uploads and the database are not persisted across Vercel/Lambda deployments. Railway or a self-hosted server is required for persistence.
+4. **Ephemeral storage on serverless & free-tier containers**: Uploads and the local SQLite database reside on ephemeral container filesystems on Vercel/Lambda and default Render free-tier instances unless a Render Persistent Disk or external database is attached.
 5. **AI response variability**: Gemini's outputs, while schema-validated, may vary in depth. The citation integrity engine discards unverified excerpts, which can reduce Q&A citation count on ambiguous passages.
 
 ---
