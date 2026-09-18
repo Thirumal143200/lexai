@@ -131,5 +131,67 @@ LexAI incorporates WCAG 2.1 AA design patterns:
 
 ---
 
+## Deployment
+
+### ⚠️ Storage Considerations
+
+LexAI uses **local SQLite + local filesystem** for document storage. This means:
+
+| Platform | SQLite | File Uploads | Notes |
+|---|---|---|---|
+| **Railway** | ✅ Persistent | ✅ Persistent | **Recommended for demos** |
+| **Render** | ✅ Persistent | ✅ Persistent | Use persistent disk addon |
+| **Fly.io** | ✅ Persistent | ✅ Persistent | Use volume mount |
+| **Vercel** | ⚠️ Ephemeral | ⚠️ Ephemeral | Data lost on redeploy — not suitable without external DB |
+| **Local** | ✅ Persistent | ✅ Persistent | Default, works out of the box |
+
+### Deploying to Railway (Recommended)
+
+1. Fork or push this repo to GitHub
+2. Create a new project at [railway.app](https://railway.app)
+3. Connect your GitHub repo
+4. Set environment variables in Railway dashboard:
+   ```
+   GEMINI_API_KEY=your_key_here
+   GEMINI_MODEL=gemini-1.5-flash
+   DB_DIR=/app/data
+   UPLOAD_DIR=/app/data/uploads
+   ```
+5. Railway will auto-detect Next.js and deploy
+
+The included [`railway.toml`](./railway.toml) configures the health check path and restart policy.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GEMINI_API_KEY` | For live AI | — | Google AI Studio API key |
+| `GEMINI_MODEL` | No | `gemini-1.5-flash` | Gemini model name |
+| `DB_DIR` | No | `./data` | SQLite database directory |
+| `UPLOAD_DIR` | No | `./data/uploads` | Document upload directory |
+| `MAX_FILE_SIZE_MB` | No | `10` | Max upload size in MB |
+
+### AI Modes
+
+| Mode | When | Behaviour |
+|---|---|---|
+| **DEMO MODE** | No `GEMINI_API_KEY` | Realistic mock responses from static fixtures. UI shows yellow banner. |
+| **LIVE AI MODE** | `GEMINI_API_KEY` set | Full Gemini analysis. UI shows green "LIVE AI" badge. |
+
+Demo mode is intentional and complete — evaluators can test the full workflow without any API credentials.
+
+---
+
+## Known Limitations
+
+1. **No user authentication**: LexAI is a single-tenant application. Adding multi-tenant auth (NextAuth + tenant-scoped DB queries) is documented in `ARCHITECTURE.md` but not implemented.
+2. **SQLite concurrency**: Suitable for single-server deployment. Under high concurrent write load, WAL mode provides read concurrency but writes serialize. For multi-server deployment, migrate to PostgreSQL.
+3. **Scanned PDF support**: Documents require machine-readable text. Scanned/image PDFs must be pre-processed with OCR (Tesseract) before upload.
+4. **Ephemeral storage on serverless**: Uploads and the database are not persisted across Vercel/Lambda deployments. Railway or a self-hosted server is required for persistence.
+5. **AI response variability**: Gemini's outputs, while schema-validated, may vary in depth. The citation integrity engine discards unverified excerpts, which can reduce Q&A citation count on ambiguous passages.
+
+---
+
 ## License
 MIT License. Created for educational and legal accessibility purposes.
+
