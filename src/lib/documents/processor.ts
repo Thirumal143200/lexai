@@ -21,14 +21,14 @@ import { AppError } from '@/lib/utils/errors';
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? path.join(process.cwd(), 'data', 'uploads');
 
 export function getUploadDir(): string {
-  if (!fs.existsSync(UPLOAD_DIR)) {
+  if (!fs.existsSync(/*turbopackIgnore: true*/ UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   }
   return UPLOAD_DIR;
 }
 
 export function buildStoragePath(documentId: string, extension: string): string {
-  return path.join(getUploadDir(), `${documentId}${extension}`);
+  return path.join(/*turbopackIgnore: true*/ getUploadDir(), `${documentId}${extension}`);
 }
 
 export async function saveUploadedFile(buffer: Buffer, documentId: string, extension: string): Promise<string> {
@@ -38,8 +38,8 @@ export async function saveUploadedFile(buffer: Buffer, documentId: string, exten
 }
 
 export async function deleteStoredFile(filename: string): Promise<void> {
-  const filePath = path.join(getUploadDir(), filename);
-  if (fs.existsSync(filePath)) {
+  const filePath = path.join(/*turbopackIgnore: true*/ getUploadDir(), filename);
+  if (fs.existsSync(/*turbopackIgnore: true*/ filePath)) {
     await fs.promises.unlink(filePath);
   }
 }

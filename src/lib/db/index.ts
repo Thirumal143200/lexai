@@ -20,7 +20,7 @@ export function getDb(): Database.Database {
   if (db) return db;
 
   // Ensure data directory exists
-  if (!fs.existsSync(DB_DIR)) {
+  if (!fs.existsSync(/*turbopackIgnore: true*/ DB_DIR)) {
     fs.mkdirSync(DB_DIR, { recursive: true });
   }
 
