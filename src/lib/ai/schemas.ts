@@ -29,16 +29,66 @@ export const DocumentMetadataSchema = z.object({
 });
 export type DocumentMetadata = z.infer<typeof DocumentMetadataSchema>;
 
-export const DocumentSummarySchema = z.object({
-  plainLanguageSummary: z.string(),
-  keyPoints: z.array(z.string()),
-  metadata: DocumentMetadataSchema,
-  wordCount: z.number().optional(),
-  structureOverview: z.array(z.object({
-    section: z.string(),
-    description: z.string(),
-  })).default([]),
-});
+export const DocumentSummarySchema = z.preprocess(
+  (val: unknown) => {
+    if (val && typeof val === 'object') {
+      const obj = val as Record<string, unknown>;
+      const summaryText =
+        (typeof obj.documentOverview === 'string' && obj.documentOverview) ||
+        (typeof obj.plainLanguageSummary === 'string' && obj.plainLanguageSummary) ||
+        undefined;
+      const res: Record<string, unknown> = { ...obj };
+      if (summaryText !== undefined) {
+        res.documentOverview = obj.documentOverview || summaryText;
+        res.plainLanguageSummary = obj.plainLanguageSummary || summaryText;
+      }
+      if (Array.isArray(obj.importantCommitments) || Array.isArray(obj.keyPoints)) {
+        res.importantCommitments = Array.isArray(obj.importantCommitments)
+          ? obj.importantCommitments
+          : obj.keyPoints;
+        res.keyPoints = Array.isArray(obj.keyPoints)
+          ? obj.keyPoints
+          : obj.importantCommitments;
+      }
+      if (obj.purpose === undefined) {
+        res.purpose = 'To establish terms and obligations between the parties';
+      }
+      const meta = obj.metadata as Record<string, unknown> | undefined;
+      if (obj.parties === undefined && meta?.parties) {
+        res.parties = meta.parties;
+      }
+      if (obj.financialTerms === undefined) res.financialTerms = [];
+      if (obj.importantDates === undefined) res.importantDates = [];
+      if (obj.majorRisksToReview === undefined) res.majorRisksToReview = [];
+      if (obj.clausesRequiringAttention === undefined) res.clausesRequiringAttention = [];
+      if (obj.suggestedQuestions === undefined) res.suggestedQuestions = [];
+      if (obj.structureOverview === undefined) res.structureOverview = [];
+      return res;
+    }
+    return val;
+  },
+  z.object({
+    documentOverview: z.string(),
+    plainLanguageSummary: z.string(),
+    purpose: z.string().default(''),
+    parties: z.array(z.string()).default([]),
+    importantCommitments: z.array(z.string()).default([]),
+    keyPoints: z.array(z.string()).default([]),
+    financialTerms: z.array(z.string()).default([]),
+    importantDates: z.array(z.string()).default([]),
+    majorRisksToReview: z.array(z.string()).default([]),
+    clausesRequiringAttention: z.array(z.string()).default([]),
+    suggestedQuestions: z.array(z.string()).default([]),
+    metadata: DocumentMetadataSchema,
+    wordCount: z.number().optional(),
+    structureOverview: z.array(
+      z.object({
+        section: z.string(),
+        description: z.string(),
+      })
+    ).default([]),
+  })
+);
 export type DocumentSummary = z.infer<typeof DocumentSummarySchema>;
 
 // ─── Clause ──────────────────────────────────────────────────────────────────
@@ -124,6 +174,7 @@ export const RiskSchema = z.object({
   affectedParty: z.string().optional(),
   potentialConsequence: z.string(),
   suggestedAction: z.string(),
+  questionToConsider: z.string().optional(),
   clauseReference: z.string(),
   excerpt: z.string(),
   professionalReviewRecommended: z.boolean().default(false),
@@ -150,6 +201,7 @@ export const ObligationSchema = z.object({
   deadlineDate: z.string().optional(), // ISO date if extractable
   condition: z.string().optional(),
   consequence: z.string().optional(),
+  statusOrReviewAction: z.string().optional(),
   sourceSection: z.string(),
   excerpt: z.string(),
   pageNumber: z.number().optional(),
@@ -229,19 +281,32 @@ export const ChecklistSchema = z.object({
 });
 export type Checklist = z.infer<typeof ChecklistSchema>;
 
-// ─── Lawyer Preparation ──────────────────────────────────────────────────────
+// ─── Document Review Brief ──────────────────────────────────────────────────────
 
-export const LawyerPrepSchema = z.object({
-  documentSummary: z.string(),
-  keyClauses: z.array(z.string()),
-  areasForReview: z.array(z.string()),
-  importantDates: z.array(z.object({
-    date: z.string(),
-    description: z.string(),
-  })),
-  keyObligations: z.array(z.string()),
-  questionsForLawyer: z.array(z.string()),
-  unclearClauses: z.array(z.string()),
-  missingInformation: z.array(z.string()),
+export const NextStepSchema = z.object({
+  category: z.string(), // e.g. 'Review', 'Clarify', 'Confirm', 'Gather information', 'Discuss with the other party', 'Ask a legal professional'
+  action: z.string(),
+  reason: z.string(),
+  source: z.string().optional(),
 });
-export type LawyerPrep = z.infer<typeof LawyerPrepSchema>;
+export type NextStep = z.infer<typeof NextStepSchema>;
+
+export const QuestionToConsiderSchema = z.object({
+  category: z.string(), // e.g. 'Obligations', 'Risks', 'Payment', 'Termination', 'Liability', 'For the other party', 'For a legal professional'
+  question: z.string(),
+  reason: z.string(),
+  source: z.string().optional(),
+});
+export type QuestionToConsider = z.infer<typeof QuestionToConsiderSchema>;
+
+export const DocumentReviewBriefSchema = z.object({
+  documentPurpose: z.string(),
+  parties: z.array(z.string()),
+  keyObligations: z.array(z.string()),
+  importantDates: z.array(z.string()),
+  financialCommitments: z.array(z.string()),
+  majorClauses: z.array(z.string()),
+  nextSteps: z.array(NextStepSchema),
+  questionsToConsider: z.array(QuestionToConsiderSchema),
+});
+export type DocumentReviewBrief = z.infer<typeof DocumentReviewBriefSchema>;

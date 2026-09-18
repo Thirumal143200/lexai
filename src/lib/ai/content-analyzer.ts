@@ -16,7 +16,7 @@ import type {
   QuestionAnswer,
   ComparisonResult,
   Checklist,
-  LawyerPrep,
+  DocumentReviewBrief,
   Clause,
   Risk,
   Obligation,
@@ -220,8 +220,20 @@ export function analyzeSummary(chunks: DocumentChunk[], fullText: string): Docum
     `Key obligations, payment structures, default triggers, and dispute mechanisms are defined across ${chunks.length} structured sections.`;
 
   return {
+    documentOverview: plainLanguageSummary,
     plainLanguageSummary,
-    keyPoints: keyPoints.slice(0, 6),
+    purpose: `To formally establish the legal and commercial terms for ${docType.toLowerCase()}`,
+    parties,
+    importantCommitments: keyPoints.slice(0, 3),
+    keyPoints,
+    financialTerms: moneyMatches ? moneyMatches.slice(0, 3) : ['No explicit financial terms detected'],
+    importantDates: [
+      effectiveDate ? `Effective Date: ${effectiveDate}` : null,
+      expiryDate ? `Expiry Date: ${expiryDate}` : null
+    ].filter((d): d is string => d !== null),
+    majorRisksToReview: ['Verify indemnification and liability caps', 'Confirm termination notice periods'],
+    clausesRequiringAttention: structureOverview.slice(0, 3).map(s => s.section),
+    suggestedQuestions: ['What are the termination conditions?', 'Are there any hidden fees?'],
     metadata: {
       title: structureOverview[0]?.section ?? `${docType}`,
       parties,
@@ -233,7 +245,7 @@ export function analyzeSummary(chunks: DocumentChunk[], fullText: string): Docum
       language: 'English',
     },
     wordCount,
-    structureOverview: structureOverview.slice(0, 10),
+    structureOverview,
   };
 }
 
@@ -580,6 +592,7 @@ export function analyzeRisksFromContent(chunks: DocumentChunk[], summary: Docume
             affectedParty: summary.metadata.parties[1] || 'Obligated Party',
             potentialConsequence: rule.consequence,
             suggestedAction: rule.action,
+            questionToConsider: `Can we clarify or negotiate the terms around ${rule.title.toLowerCase()}?`,
             clauseReference: section,
             excerpt,
             professionalReviewRecommended: rule.level === 'high-attention',
@@ -600,7 +613,8 @@ export function analyzeRisksFromContent(chunks: DocumentChunk[], summary: Docume
       affectedParty: 'Both parties',
       potentialConsequence: 'Normal commercial contractual performance obligations.',
       suggestedAction: 'Verify operational capability to meet all listed deadlines and deliverables.',
-      clauseReference: summary.structureOverview[0]?.section || 'General Provisions',
+      questionToConsider: 'Are there any operational concerns with meeting these standard terms?',
+      clauseReference: summary.clausesRequiringAttention?.[0] || 'General Provisions',
       excerpt: fullText.slice(0, 180),
       professionalReviewRecommended: false,
     });
@@ -663,6 +677,7 @@ export function extractObligationsFromContent(chunks: DocumentChunk[]): Obligati
             deadline: deadlineMatch ? deadlineMatch[0].trim() : undefined,
             condition: s.includes('provided that') ? 'Subject to specified proviso' : undefined,
             consequence: s.includes('default') ? 'Failure constitutes breach or default' : undefined,
+            statusOrReviewAction: 'Review and add to calendar',
             sourceSection: section,
             excerpt: s,
             pageNumber: chunk.pageNumber,
@@ -1016,29 +1031,33 @@ export function generateChecklistFromContent(
   };
 }
 
-// ─── Lawyer Prep Generation ──────────────────────────────────────────────────
+// ─── Document Review Brief Generation ───────────────────────────────────────
 
-export function generateLawyerPrepFromContent(
+export function generateDocumentReviewBriefFromContent(
   chunks: DocumentChunk[],
   summary: DocumentSummary,
   risks: RiskAnalysisResult
-): LawyerPrep {
+): DocumentReviewBrief {
   const obligations = extractObligationsFromContent(chunks).obligations;
 
   return {
-    documentSummary: summary.plainLanguageSummary,
-    keyClauses: summary.structureOverview.map((s) => s.section),
-    areasForReview: risks.risks.map((r) => `${r.title} (${r.clauseReference}) - ${r.whyItMatters}`),
-    importantDates: [
-      ...(summary.metadata.effectiveDate ? [{ date: summary.metadata.effectiveDate, description: 'Effective / Commencement Date' }] : []),
-      ...(summary.metadata.expiryDate ? [{ date: summary.metadata.expiryDate, description: 'Contract Expiration Date' }] : []),
-    ],
+    documentPurpose: summary.purpose || 'Legal agreement',
+    parties: summary.metadata.parties || [],
     keyObligations: obligations.slice(0, 5).map((o) => `${o.party}: ${o.obligation} (${o.sourceSection})`),
-    questionsForLawyer: risks.risks.filter((r) => r.level === 'high-attention').map((r) => `How can we negotiate or mitigate the risk in ${r.clauseReference} regarding ${r.title.toLowerCase()}?`),
-    unclearClauses: risks.risks.filter((r) => r.level === 'review').map((r) => `${r.clauseReference}: ${r.description}`),
-    missingInformation: [
-      summary.metadata.expiryDate ? '' : 'No explicit expiration date found in document text.',
-      summary.metadata.governingLaw ? '' : 'Governing law jurisdiction not explicitly designated.',
-    ].filter(Boolean),
+    importantDates: summary.importantDates || [],
+    financialCommitments: summary.financialTerms || [],
+    majorClauses: summary.clausesRequiringAttention || [],
+    nextSteps: risks.risks.slice(0, 3).map(r => ({
+      category: 'Review',
+      action: r.suggestedAction,
+      reason: r.whyItMatters,
+      source: r.clauseReference
+    })),
+    questionsToConsider: risks.risks.slice(0, 3).map(r => ({
+      category: 'Risks',
+      question: r.questionToConsider || `Review ${r.title}?`,
+      reason: r.whyItMatters,
+      source: r.clauseReference
+    }))
   };
 }

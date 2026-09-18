@@ -10,7 +10,7 @@ import type {
   QuestionAnswer,
   ComparisonResult,
   Checklist,
-  LawyerPrep,
+  DocumentReviewBrief,
 } from './schemas';
 
 export interface DocumentChunk {
@@ -83,13 +83,13 @@ export interface AIProvider {
   ): Promise<Checklist>;
 
   /**
-   * Generate lawyer preparation materials.
+   * Generate a document review brief for preparing a legal professional discussion.
    */
-  generateLawyerPrep(
+  generateDocumentReviewBrief(
     chunks: DocumentChunk[],
     summary: DocumentSummary,
     risks: RiskAnalysisResult
-  ): Promise<LawyerPrep>;
+  ): Promise<DocumentReviewBrief>;
 }
 
 export type { DocumentSummary, ClauseExtractionResult, RiskAnalysisResult };

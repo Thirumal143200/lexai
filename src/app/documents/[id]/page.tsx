@@ -10,8 +10,8 @@ import type {
   RiskAnalysisResult,
   ObligationExtractionResult,
   QuestionAnswer,
-  Checklist,
   Citation,
+  DocumentReviewBrief,
 } from '@/lib/ai/schemas';
 import {
   CLAUSE_FILTER_OPTIONS,
@@ -38,7 +38,7 @@ interface QuestionHistoryItem {
   askedAt: string;
 }
 
-type WorkspaceTab = 'summary' | 'clauses' | 'risks' | 'obligations' | 'qa' | 'checklists';
+type WorkspaceTab = 'understand' | 'identify-clauses' | 'identify-risks' | 'identify-obligations' | 'ask' | 'prepare';
 
 export default function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
@@ -48,7 +48,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   // Document metadata
   const [doc, setDoc] = useState<DocumentMeta | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(true);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('summary');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('understand');
 
   // Analyses data states — each has loading + error + data
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
@@ -79,12 +79,10 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
   const [qaHistory, setQaHistory] = useState<QuestionHistoryItem[]>([]);
   const [qaError, setQaError] = useState<string | null>(null);
 
-  // Checklist states
-  const [checklistType, setChecklistType] = useState<Checklist['type']>('before-signing');
-  const [checklist, setChecklist] = useState<Checklist | null>(null);
-  const [loadingChecklist, setLoadingChecklist] = useState(false);
-  const [checklistError, setChecklistError] = useState<string | null>(null);
-  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  // Act / Prepare states
+  const [reviewBrief, setReviewBrief] = useState<DocumentReviewBrief | null>(null);
+  const [loadingReviewBrief, setLoadingReviewBrief] = useState(false);
+  const [reviewBriefError, setReviewBriefError] = useState<string | null>(null);
 
   // 1. Fetch Document Info
   const fetchDoc = useCallback(async () => {
@@ -281,27 +279,23 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     }
   }, [documentId]);
 
-  // 7. Fetch Checklist
-  const fetchChecklist = useCallback(async (type: Checklist['type']) => {
-    setLoadingChecklist(true);
-    setChecklistError(null);
+  // 7. Fetch Review Brief
+  const fetchReviewBrief = useCallback(async () => {
+    setLoadingReviewBrief(true);
+    setReviewBriefError(null);
     try {
-      const res = await fetch(`/api/documents/${documentId}/checklist`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
-      });
+      const res = await fetch(`/api/documents/${documentId}/review-brief`);
       if (res.ok) {
-        const data = (await res.json()) as { checklist: Checklist };
-        setChecklist(data.checklist);
+        const data = (await res.json()) as { reviewBrief: DocumentReviewBrief };
+        setReviewBrief(data.reviewBrief);
       } else {
-        const data = (await res.json().catch(() => ({ error: 'Failed to generate checklist' }))) as { error?: string };
-        setChecklistError(data.error || `Checklist generation failed (HTTP ${res.status})`);
+        const data = (await res.json().catch(() => ({ error: 'Failed to generate review brief' }))) as { error?: string };
+        setReviewBriefError(data.error || `Generation failed (HTTP ${res.status})`);
       }
     } catch {
-      setChecklistError('Failed to connect to the server. Please try again.');
+      setReviewBriefError('Failed to connect to the server. Please try again.');
     } finally {
-      setLoadingChecklist(false);
+      setLoadingReviewBrief(false);
     }
   }, [documentId]);
 
@@ -319,15 +313,14 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
     return () => clearInterval(timer);
   }, [doc, fetchDoc]);
 
-  // Auto-fetch data based on active tab
   useEffect(() => {
     if (!doc || doc.status !== 'ready') return;
-    if (activeTab === 'summary') fetchSummary();
-    if (activeTab === 'clauses') fetchClauses();
-    if (activeTab === 'risks') fetchRisks();
-    if (activeTab === 'obligations') fetchObligations();
-    if (activeTab === 'checklists' && !checklist) fetchChecklist(checklistType);
-  }, [activeTab, doc, fetchSummary, fetchClauses, fetchRisks, fetchObligations, checklist, fetchChecklist, checklistType]);
+    if (activeTab === 'understand') fetchSummary();
+    if (activeTab === 'identify-clauses') fetchClauses();
+    if (activeTab === 'identify-risks') fetchRisks();
+    if (activeTab === 'identify-obligations') fetchObligations();
+    if (activeTab === 'prepare' && !reviewBrief) fetchReviewBrief();
+  }, [activeTab, doc, fetchSummary, fetchClauses, fetchRisks, fetchObligations, reviewBrief, fetchReviewBrief]);
 
   // Submit Q&A
   const handleAskQuestion = async (qText?: string) => {
@@ -454,7 +447,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
         <div className="notice notice-info" style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-3)' }}>
           <span aria-hidden="true">ℹ</span>
           <div style={{ fontSize: '0.8125rem' }}>
-            <strong>Legal Assistance Notice:</strong> This analysis is grounded in the document text to help non-lawyers understand key terms and potential risks. It does not constitute formal legal counsel. Always consult a qualified attorney for legal decisions.
+            <strong>Legal Assistance Notice:</strong> LexAI provides document-based legal information and analysis. It does not provide legal advice or replace a qualified legal professional. Always consult a qualified attorney for legal decisions.
           </div>
         </div>
 
@@ -474,12 +467,12 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
         {/* Workspace Tab Navigation */}
         <div style={{ display: 'flex', gap: 'var(--space-2)', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-6)', overflowX: 'auto' }}>
           {[
-            { id: 'summary', label: 'Summary & Overview' },
-            { id: 'clauses', label: 'Clause Breakdown' },
-            { id: 'risks', label: 'Risk & Red-Flags' },
-            { id: 'obligations', label: 'Obligations & Timeline' },
-            { id: 'qa', label: 'Ask Document (Q&A)' },
-            { id: 'checklists', label: 'Checklists & Action Plan' },
+            { id: 'understand', label: 'Understand' },
+            { id: 'identify-clauses', label: 'Identify: Clauses' },
+            { id: 'identify-risks', label: 'Identify: Risks' },
+            { id: 'identify-obligations', label: 'Identify: Obligations' },
+            { id: 'ask', label: 'Ask' },
+            { id: 'prepare', label: 'Act / Prepare' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -501,8 +494,8 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
           ))}
         </div>
 
-        {/* ── TAB 1: SUMMARY & OVERVIEW ── */}
-        {activeTab === 'summary' && (
+        {/* ── TAB 1: UNDERSTAND ── */}
+        {activeTab === 'understand' && (
           <div aria-live="polite">
             {loadingSummary ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
@@ -600,43 +593,84 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
                   </div>
                 )}
 
-                {/* Plain-Language Narrative */}
+                {/* Document Overview */}
                 <div className="card">
                   <div className="card-header">
-                    <h3 className="card-title">Plain-Language Summary</h3>
-                    <p className="card-description">Simplified explanation of the agreement's purpose and effect</p>
+                    <h3 className="card-title">Document Overview</h3>
+                    <p className="card-description">Plain-English explanation of the document's purpose and effect</p>
                   </div>
                   <div className="card-body">
+                    <div style={{ marginBottom: 'var(--space-3)' }}>
+                      <strong>Purpose:</strong> {summary.purpose}
+                    </div>
                     <p style={{ lineHeight: 1.6, fontSize: '0.9375rem', color: 'var(--color-text)' }}>
-                      {summary.plainLanguageSummary}
+                      {summary.documentOverview}
                     </p>
                   </div>
                 </div>
 
-                {/* Key Points */}
-                {summary.keyPoints && summary.keyPoints.length > 0 && (
-                  <div className="card">
-                    <div className="card-header">
-                      <h3 className="card-title">Key Provisions &amp; Takeaways</h3>
+                {/* Important Commitments & Terms */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+                  {summary.importantCommitments && summary.importantCommitments.length > 0 && (
+                    <div className="card">
+                      <div className="card-header"><h3 className="card-title">Important Commitments</h3></div>
+                      <div className="card-body">
+                        <ul style={{ paddingLeft: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                          {summary.importantCommitments.map((item, idx) => (
+                            <li key={idx} style={{ fontSize: '0.9375rem', color: 'var(--color-text-2)' }}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
-                    <div className="card-body">
-                      <ul style={{ paddingLeft: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                        {summary.keyPoints.map((item, idx) => (
-                          <li key={idx} style={{ fontSize: '0.9375rem', lineHeight: 1.5, color: 'var(--color-text-2)' }}>
-                            {item}
-                          </li>
-                        ))}
-                      </ul>
+                  )}
+                  {summary.financialTerms && summary.financialTerms.length > 0 && (
+                    <div className="card">
+                      <div className="card-header"><h3 className="card-title">Financial Terms</h3></div>
+                      <div className="card-body">
+                        <ul style={{ paddingLeft: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                          {summary.financialTerms.map((item, idx) => (
+                            <li key={idx} style={{ fontSize: '0.9375rem', color: 'var(--color-text-2)' }}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+
+                {/* Review Highlights */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+                  {summary.majorRisksToReview && summary.majorRisksToReview.length > 0 && (
+                    <div className="card">
+                      <div className="card-header"><h3 className="card-title" style={{ color: 'var(--color-risk-high)' }}>Major Risks to Review</h3></div>
+                      <div className="card-body">
+                        <ul style={{ paddingLeft: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                          {summary.majorRisksToReview.map((item, idx) => (
+                            <li key={idx} style={{ fontSize: '0.9375rem', color: 'var(--color-text-2)' }}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                  {summary.clausesRequiringAttention && summary.clausesRequiringAttention.length > 0 && (
+                    <div className="card">
+                      <div className="card-header"><h3 className="card-title">Clauses Requiring Attention</h3></div>
+                      <div className="card-body">
+                        <ul style={{ paddingLeft: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                          {summary.clausesRequiringAttention.map((item, idx) => (
+                            <li key={idx} style={{ fontSize: '0.9375rem', color: 'var(--color-text-2)' }}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ── TAB 2: CLAUSE BREAKDOWN ── */}
-        {activeTab === 'clauses' && (
+        {/* ── TAB 2: IDENTIFY CLAUSES ── */}
+        {activeTab === 'identify-clauses' && (
           <div aria-live="polite">
             {loadingClauses ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
@@ -811,8 +845,8 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
-        {/* ── TAB 3: RISK & RED FLAGS ── */}
-        {activeTab === 'risks' && (
+        {/* ── TAB 3: IDENTIFY RISKS ── */}
+        {activeTab === 'identify-risks' && (
           <div aria-live="polite">
             {loadingRisks ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
@@ -886,13 +920,30 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
                       <div style={{ marginTop: 'var(--space-2)', fontSize: '0.8125rem', color: 'var(--color-text-2)' }}>
                         <strong>Why it matters:</strong> {risk.whyItMatters}
                       </div>
+                      {risk.excerpt && (
+                        <div style={{ marginTop: 'var(--space-2)' }}>
+                          <blockquote style={{ fontFamily: 'var(--font-legal)', fontSize: '0.8125rem', color: 'var(--color-text-3)', borderLeft: '3px solid var(--color-border-strong)', paddingLeft: 'var(--space-3)', fontStyle: 'italic', margin: 0 }}>
+                            &ldquo;{risk.excerpt}&rdquo;
+                          </blockquote>
+                        </div>
+                      )}
                       {risk.suggestedAction && (
                         <div style={{ marginTop: 'var(--space-3)', padding: 'var(--space-2) var(--space-3)', background: 'var(--color-surface-2)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--color-accent)' }}>
                           <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-accent)', textTransform: 'uppercase' }}>
-                            Recommended Action / Counter-Proposal:
+                            What to Review / Clarify:
                           </span>
                           <p style={{ fontSize: '0.8125rem', color: 'var(--color-text)', marginTop: '2px' }}>
                             {risk.suggestedAction}
+                          </p>
+                        </div>
+                      )}
+                      {risk.questionToConsider && (
+                        <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2) var(--space-3)', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase' }}>
+                            Question to Consider:
+                          </span>
+                          <p style={{ fontSize: '0.8125rem', color: 'var(--color-text)', marginTop: '2px', fontWeight: 500 }}>
+                            {risk.questionToConsider}
                           </p>
                         </div>
                       )}
@@ -904,8 +955,8 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
-        {/* ── TAB 4: OBLIGATIONS & TIMELINE ── */}
-        {activeTab === 'obligations' && (
+        {/* ── TAB 4: IDENTIFY OBLIGATIONS ── */}
+        {activeTab === 'identify-obligations' && (
           <div aria-live="polite">
             {loadingObligations ? (
               <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-text-3)' }}>
@@ -948,6 +999,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
                         <th>Obligation</th>
                         <th>Deadline / Trigger</th>
                         <th>Consequence / Penalty</th>
+                        <th>Review Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -957,7 +1009,10 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
                           <td style={{ fontSize: '0.875rem', color: 'var(--color-text-2)' }}>{ob.obligation}</td>
                           <td style={{ fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>{ob.deadline || ob.trigger || 'Ongoing'}</td>
                           <td style={{ fontSize: '0.8125rem', color: 'var(--color-risk-high)' }}>
-                            {ob.consequence || 'Unspecified breach'}
+                            {ob.consequence || 'Unspecified'}
+                          </td>
+                          <td style={{ fontSize: '0.8125rem', color: 'var(--color-accent)' }}>
+                            {ob.statusOrReviewAction || 'Review'}
                           </td>
                         </tr>
                       ))}
@@ -970,7 +1025,7 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
         )}
 
         {/* ── TAB 5: ASK THE DOCUMENT (RAG Q&A) ── */}
-        {activeTab === 'qa' && (
+        {activeTab === 'ask' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }} aria-live="polite">
             <div className="card">
               <div className="card-header">
@@ -1096,118 +1151,89 @@ export default function DocumentDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
-        {/* ── TAB 6: CHECKLISTS & ACTION PLAN ── */}
-        {activeTab === 'checklists' && (
+        {/* ── TAB 6: ACT / PREPARE ── */}
+        {activeTab === 'prepare' && (
           <div aria-live="polite">
             <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
-              <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-                <div>
-                  <h3 className="card-title">Actionable Checklist</h3>
-                  <p className="card-description">Specific steps, due diligence points, and red flags to address</p>
-                </div>
-                <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                  <select
-                    className="input"
-                    style={{ fontSize: '0.8125rem', padding: 'var(--space-1) var(--space-2)' }}
-                    value={checklistType}
-                    onChange={(e) => {
-                      const newType = e.target.value as Checklist['type'];
-                      setChecklistType(newType);
-                      fetchChecklist(newType);
-                    }}
-                  >
-                    <option value="before-signing">Before Signing (Due Diligence)</option>
-                    <option value="after-signing">After Signing (Onboarding)</option>
-                    <option value="lawyer-questions">Questions for Legal Counsel</option>
-                    <option value="termination">Termination &amp; Exit Plan</option>
-                    <option value="renewal">Contract Renewal</option>
-                  </select>
-                </div>
+              <div className="card-header">
+                <h3 className="card-title">Legal Review Brief</h3>
+                <p className="card-description">Actionable next steps and specific questions to help you prepare for a consultation or negotiation.</p>
               </div>
 
               <div className="card-body">
-                {loadingChecklist ? (
+                {loadingReviewBrief ? (
                   <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-3)' }}>
                     <div style={{ marginBottom: 'var(--space-2)' }}>⏳</div>
-                    Generating checklist items…
+                    Generating your action plan…
                   </div>
-                ) : checklistError ? (
+                ) : reviewBriefError ? (
                   <div className="notice notice-error" role="alert" style={{ marginBottom: 'var(--space-4)' }}>
                     <span>⚠</span>
                     <div style={{ flex: 1 }}>
-                      <strong>Checklist Generation Failed</strong>
-                      <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{checklistError}</p>
+                      <strong>Brief Generation Failed</strong>
+                      <p style={{ marginTop: '2px', fontSize: '0.875rem' }}>{reviewBriefError}</p>
                       <button
                         className="btn btn-secondary btn-sm"
                         style={{ marginTop: 'var(--space-2)' }}
-                        onClick={() => fetchChecklist(checklistType)}
+                        onClick={() => fetchReviewBrief()}
                       >
-                        Retry Checklist Generation
+                        Retry Generation
                       </button>
                     </div>
                   </div>
-                ) : !checklist || checklist.items.length === 0 ? (
+                ) : !reviewBrief ? (
                   <div style={{ textAlign: 'center', padding: 'var(--space-6)' }}>
-                    <button className="btn btn-secondary btn-sm" onClick={() => fetchChecklist(checklistType)}>
-                      Generate Checklist
+                    <button className="btn btn-secondary btn-sm" onClick={() => fetchReviewBrief()}>
+                      Generate Legal Review Brief
                     </button>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.9375rem', marginBottom: 'var(--space-1)' }}>
-                      {checklist.title}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+                    
+                    {/* Document Context */}
+                    <div style={{ background: 'var(--color-surface-2)', padding: 'var(--space-4)', borderRadius: 'var(--radius-sm)' }}>
+                      <h4 style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase', marginBottom: 'var(--space-2)' }}>Context for Legal Professional</h4>
+                      <p style={{ fontSize: '0.9375rem', color: 'var(--color-text)' }}>{reviewBrief.documentPurpose}</p>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)', marginTop: 'var(--space-3)' }}>
+                        <div><strong>Parties:</strong> {reviewBrief.parties.join(' / ')}</div>
+                        <div><strong>Key Clauses:</strong> {reviewBrief.majorClauses.join(', ')}</div>
+                      </div>
                     </div>
-                    {checklist.items.map((item, idx) => {
-                      const itemId = `check-${idx}`;
-                      const isChecked = checkedItems[itemId] || false;
 
-                      return (
-                        <div
-                          key={idx}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 'var(--space-3)',
-                            padding: 'var(--space-3)',
-                            background: isChecked ? 'var(--color-surface-2)' : 'var(--color-surface)',
-                            border: '1px solid var(--color-border)',
-                            borderRadius: 'var(--radius-sm)',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            id={itemId}
-                            checked={isChecked}
-                            onChange={(e) => setCheckedItems({ ...checkedItems, [itemId]: e.target.checked })}
-                            style={{ marginTop: '3px', cursor: 'pointer' }}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <label
-                              htmlFor={itemId}
-                              style={{
-                                fontWeight: 500,
-                                fontSize: '0.875rem',
-                                color: isChecked ? 'var(--color-text-3)' : 'var(--color-text)',
-                                textDecoration: isChecked ? 'line-through' : 'none',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {item.item}
-                            </label>
-                            {item.description && (
-                              <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-2)', marginTop: '2px' }}>
-                                {item.description}
-                              </p>
-                            )}
+                    {/* Next Steps */}
+                    <div>
+                      <h4 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: 'var(--space-3)' }}>Recommended Next Steps</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                        {reviewBrief.nextSteps.map((step, idx) => (
+                          <div key={idx} style={{ padding: 'var(--space-3)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+                            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-1)' }}>
+                              <span className="badge badge-accent">{step.category}</span>
+                              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{step.action}</span>
+                            </div>
+                            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-2)', marginTop: '4px' }}><strong>Reason:</strong> {step.reason}</p>
+                            {step.source && <p style={{ fontSize: '0.75rem', color: 'var(--color-text-3)', marginTop: '2px' }}>Source: {step.source}</p>}
                           </div>
-                          {item.priority && (
-                            <span className={`badge ${item.priority === 'high' ? 'badge-high' : item.priority === 'medium' ? 'badge-med' : 'badge-low'}`}>
-                              {item.priority}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Questions to Consider */}
+                    <div>
+                      <h4 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--color-text)', marginBottom: 'var(--space-3)' }}>Questions to Consider</h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                        {reviewBrief.questionsToConsider.map((q, idx) => (
+                          <div key={idx} style={{ padding: 'var(--space-3)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--color-accent)' }}>
+                            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-1)' }}>
+                              <span className="badge badge-neutral">{q.category}</span>
+                              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{q.question}</span>
+                            </div>
+                            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-2)', marginTop: '4px' }}><strong>Why ask this:</strong> {q.reason}</p>
+                            {q.source && <p style={{ fontSize: '0.75rem', color: 'var(--color-text-3)', marginTop: '2px' }}>Source: {q.source}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
                   </div>
                 )}
               </div>

@@ -22,7 +22,7 @@ import type {
   QuestionAnswer,
   ComparisonResult,
   Checklist,
-  LawyerPrep,
+  DocumentReviewBrief,
 } from './schemas';
 import {
   DocumentSummarySchema,
@@ -32,7 +32,7 @@ import {
   QuestionAnswerSchema,
   ComparisonResultSchema,
   ChecklistSchema,
-  LawyerPrepSchema,
+  DocumentReviewBriefSchema,
 } from './schemas';
 import { AppError } from '@/lib/utils/errors';
 import { withRetry } from '@/lib/utils/retry';
@@ -410,14 +410,24 @@ export class GeminiProvider implements AIProvider {
 
   async summarizeDocument(chunks: DocumentChunk[], _fullText: string): Promise<DocumentSummary> {
     const docContent = this.chunksToText(chunks);
-    const prompt = `Analyze this legal document and provide a comprehensive summary in JSON format.
+    const prompt = `Analyze this legal document and provide a comprehensive Legal Document Brief in JSON format.
+This brief must clearly answer: "What does this document mean for me?"
+Keep the language informational. Do not provide legal advice or tell the user what they should do (e.g., do not say "You should sign" or "You should reject").
+Instead, use phrases like "Consider reviewing..." or "Points to clarify...".
 
 ${this.wrapDocumentData(docContent)}
 
 Return a JSON object with this EXACT structure:
 {
-  "plainLanguageSummary": "A clear, 2-4 paragraph plain-English summary of what this document is and what it does",
-  "keyPoints": ["key point 1", "key point 2", ...],
+  "documentOverview": "A clear, 2-4 paragraph plain-English overview of what this document is and what it does",
+  "purpose": "The primary goal or purpose of the agreement",
+  "parties": ["party 1", "party 2"],
+  "importantCommitments": ["commitment 1", "commitment 2"],
+  "financialTerms": ["financial term 1", "financial term 2"],
+  "importantDates": ["date 1: meaning", "date 2: meaning"],
+  "majorRisksToReview": ["risk 1", "risk 2"],
+  "clausesRequiringAttention": ["clause 1", "clause 2"],
+  "suggestedQuestions": ["question to ask 1", "question to ask 2"],
   "metadata": {
     "title": "document title or null",
     "parties": ["party 1", "party 2"],
@@ -428,10 +438,7 @@ Return a JSON object with this EXACT structure:
     "governingLaw": "governing law or null",
     "language": "English"
   },
-  "wordCount": number,
-  "structureOverview": [
-    {"section": "section name", "description": "what this section covers"}
-  ]
+  "wordCount": number
 }`;
 
     return this.callGemini(prompt, DocumentSummarySchema, 'summarizeDocument');
@@ -477,6 +484,7 @@ Only extract clauses that actually appear in the document. Do not invent clauses
 
 IMPORTANT: Do not make definitive legal judgments. Identify areas that may warrant attention or professional review.
 Frame findings as "potential areas for review" not absolute legal determinations.
+Provide a specific "question to consider" for each risk to help the user clarify the issue.
 
 ${this.wrapDocumentData(docContent)}
 
@@ -491,7 +499,8 @@ Return a JSON object with this EXACT structure:
       "whyItMatters": "why this may be important to understand",
       "affectedParty": "which party may be affected",
       "potentialConsequence": "what could happen",
-      "suggestedAction": "what the user should consider",
+      "suggestedAction": "what the user should review or clarify (e.g., 'Confirm whether...')",
+      "questionToConsider": "a specific question the user could ask to clarify this risk",
       "clauseReference": "section reference",
       "excerpt": "relevant text from document",
       "professionalReviewRecommended": true | false
@@ -524,6 +533,7 @@ Return a JSON object:
       "deadlineDate": "ISO date string if extractable or null",
       "condition": "any conditions or null",
       "consequence": "consequence of non-compliance or null",
+      "statusOrReviewAction": "a suggested action to review or track this obligation (e.g., 'Review compliance with...', 'Track deadline...')",
       "sourceSection": "section reference",
       "excerpt": "relevant text excerpt",
       "pageNumber": number or null
@@ -592,7 +602,8 @@ Return a JSON object:
     const docAContent = this.chunksToText(chunksA, 25_000);
     const docBContent = this.chunksToText(chunksB, 25_000);
 
-    const prompt = `Compare these two legal documents and identify differences.
+    const prompt = `Compare these two legal documents and identify differences transparently.
+Do NOT call one document "better", and do NOT rank the documents. The goal is transparent, neutral comparison.
 
 Document A: "${titleA}"
 <DOCUMENT_DATA id="A">
@@ -673,32 +684,47 @@ Return a JSON object:
     return this.callGemini(prompt, ChecklistSchema, 'generateChecklist');
   }
 
-  async generateLawyerPrep(
+  async generateDocumentReviewBrief(
     chunks: DocumentChunk[],
     _summary: DocumentSummary,
     _risks: RiskAnalysisResult
-  ): Promise<LawyerPrep> {
+  ): Promise<DocumentReviewBrief> {
     const docContent = this.chunksToText(chunks, 30_000);
 
-    const prompt = `Generate preparation materials for a consultation with a legal professional about this document.
-This is to HELP the user prepare for a lawyer meeting, NOT to replace legal advice.
+    const prompt = `Generate a Document Review Brief to help the user prepare for a conversation with a legal professional.
+This is to HELP the user prepare for a lawyer meeting, NOT to replace legal advice. Do not provide legal conclusions.
+
+For the Next Steps, generate grounded, document-specific next-step categories such as: Review, Clarify, Confirm, Gather information, Discuss with the other party, Ask a legal professional.
+For the Questions to Consider, generate document-grounded questions grouped into categories like: Obligations, Risks, Payment, Termination, Liability, For the other party, For a legal professional.
 
 ${this.wrapDocumentData(docContent)}
 
 Return a JSON object:
 {
-  "documentSummary": "concise summary for lawyer context",
-  "keyClauses": ["important clause 1", "important clause 2"],
-  "areasForReview": ["area needing professional review 1"],
-  "importantDates": [
-    {"date": "date", "description": "what happens on this date"}
+  "documentPurpose": "concise purpose of the document",
+  "parties": ["party 1", "party 2"],
+  "keyObligations": ["important obligation 1", "important obligation 2"],
+  "importantDates": ["date 1", "date 2"],
+  "financialCommitments": ["commitment 1", "commitment 2"],
+  "majorClauses": ["clause 1", "clause 2"],
+  "nextSteps": [
+    {
+      "category": "e.g. Review, Clarify, Confirm",
+      "action": "the specific action to take",
+      "reason": "why this action is recommended based on the document",
+      "source": "section reference"
+    }
   ],
-  "keyObligations": ["obligation 1", "obligation 2"],
-  "questionsForLawyer": ["question 1", "question 2"],
-  "unclearClauses": ["clause that needs clarification"],
-  "missingInformation": ["information not present in document that may be important"]
+  "questionsToConsider": [
+    {
+      "category": "e.g. Obligations, Risks, Payment",
+      "question": "the specific question",
+      "reason": "why to ask this question",
+      "source": "section reference"
+    }
+  ]
 }`;
 
-    return this.callGemini(prompt, LawyerPrepSchema, 'generateLawyerPrep');
+    return this.callGemini(prompt, DocumentReviewBriefSchema, 'generateDocumentReviewBrief');
   }
 }

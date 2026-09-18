@@ -21,7 +21,7 @@ import type {
   QuestionAnswer,
   ComparisonResult,
   Checklist,
-  LawyerPrep,
+  DocumentReviewBrief,
 } from './schemas';
 import type { GeminiProvider } from './gemini';
 import type { MockAIProvider } from './mock';
@@ -198,15 +198,15 @@ export class ResilientAIProvider implements AIProvider {
     );
   }
 
-  async generateLawyerPrep(
+  async generateDocumentReviewBrief(
     chunks: DocumentChunk[],
     summary: DocumentSummary,
     risks: RiskAnalysisResult
-  ): Promise<LawyerPrep> {
+  ): Promise<DocumentReviewBrief> {
     return this.executeWithFallback(
-      'generateLawyerPrep',
-      () => this.gemini.generateLawyerPrep(chunks, summary, risks),
-      () => this.local.generateLawyerPrep(chunks, summary, risks)
+      'generateDocumentReviewBrief',
+      () => this.gemini.generateDocumentReviewBrief(chunks, summary, risks),
+      () => this.local.generateDocumentReviewBrief(chunks, summary, risks)
     );
   }
 }

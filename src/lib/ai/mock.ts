@@ -15,7 +15,7 @@ import type {
   QuestionAnswer,
   ComparisonResult,
   Checklist,
-  LawyerPrep,
+  DocumentReviewBrief,
 } from './schemas';
 import {
   analyzeSummary,
@@ -25,7 +25,7 @@ import {
   answerQuestionFromContent,
   compareDocumentsFromContent,
   generateChecklistFromContent,
-  generateLawyerPrepFromContent,
+  generateDocumentReviewBriefFromContent,
 } from './content-analyzer';
 
 export class MockAIProvider implements AIProvider {
@@ -69,11 +69,11 @@ export class MockAIProvider implements AIProvider {
     return generateChecklistFromContent(chunks, type, summary);
   }
 
-  async generateLawyerPrep(
+  async generateDocumentReviewBrief(
     chunks: DocumentChunk[],
     summary: DocumentSummary,
     risks: RiskAnalysisResult
-  ): Promise<LawyerPrep> {
-    return generateLawyerPrepFromContent(chunks, summary, risks);
+  ): Promise<DocumentReviewBrief> {
+    return generateDocumentReviewBriefFromContent(chunks, summary, risks);
   }
 }
